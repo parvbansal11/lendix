@@ -1,0 +1,40 @@
+services:
+  - type: web
+    name: saakh
+    runtime: python
+    plan: starter
+    numInstances: 1
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /healthz
+    disk:
+      name: saakh-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL_FAST
+        sync: false
+      - key: GEMINI_MODEL_DEEP
+        sync: false
+      - key: DB_PATH
+        sync: false
+      - key: OUTPUT_DIR
+        sync: false
+      - key: ENV
+        sync: false
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: MAX_LLM_CALLS_PER_DAY
+        sync: false
+      - key: COOLING_OFF_DAYS
+        sync: false
+      - key: DEMO_SKIP_COOLING_OFF
+        sync: false
+      - key: NONILION_DEV_ALLOW_UNVERIFIED
+        sync: false
+      - key: NONILION_PAIRING_CODE
+        sync: false
+      - key: NONILION_BOT_TOKEN
+        sync: false
