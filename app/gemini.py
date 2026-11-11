@@ -1,17 +1,26 @@
 """Official SDK transport with typed outputs, explicit tools and bounded retries."""
 import asyncio
 import json
+import logging
 from google import genai
 from google.genai import types
 
 from .model import ModelUnavailable, ModelBudgetExceeded
+
+log = logging.getLogger("lendix.model")
 
 
 class GeminiClient:
     def __init__(self, settings, store, sdk=None, sleep=asyncio.sleep):
         self.settings, self.store, self.sleep = settings, store, sleep
         self.sdk = sdk or genai.Client(api_key=settings.gemini_api_key,
-                                       http_options=types.HttpOptions(timeout=45000))
+                                       http_options=types.HttpOptions(timeout=getattr(settings, "model_timeout_ms", 90000)))
+
+    def thinking(self):
+        level = getattr(self.settings, "thinking_level", "low")
+        if level in ("", "off"):
+            return None
+        return types.ThinkingConfig(thinking_level=level.upper())
 
     @staticmethod
     def delimit(data):
@@ -30,7 +39,9 @@ class GeminiClient:
                 try:
                     transient = int(code) == 429 or 500 <= int(code) <= 599
                 except (TypeError, ValueError):
-                    transient = isinstance(exc, (TimeoutError, ConnectionError))
+                    transient = isinstance(exc, (TimeoutError, ConnectionError)) or "timeout" in type(exc).__name__.lower()
+                # Class and status only: provider messages can echo request content.
+                log.warning("model call failed: %s status=%s attempt=%d transient=%s", type(exc).__name__, code, attempt + 1, transient)
                 if transient and attempt < 2:
                     await self.sleep(2 ** attempt)
                     continue
@@ -49,6 +60,7 @@ class GeminiClient:
                 temperature=0.5 if human_message else 0.2,
                 response_mime_type="application/json", response_schema=schema,
                 automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+                thinking_config=self.thinking(),
             ),
         )
         try:
@@ -71,6 +83,7 @@ class GeminiClient:
                 tools=[types.Tool(function_declarations=[declaration])],
                 tool_config=types.ToolConfig(function_calling_config=types.FunctionCallingConfig(mode="ANY", allowed_function_names=[name])),
                 automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+                thinking_config=self.thinking(),
             ),
         )
         calls = response.function_calls or []

@@ -22,6 +22,9 @@ class Settings:
     env: str = field(default_factory=lambda: os.getenv("ENV", "production"))
     public_base_url: str = field(default_factory=lambda: os.getenv("PUBLIC_BASE_URL", "").rstrip("/"))
     max_llm_calls_per_day: int = field(default_factory=lambda: int(os.getenv("MAX_LLM_CALLS_PER_DAY", "500")))
+    # Thinking models are slow at their default depth; short structured steps only need a little.
+    thinking_level: str = field(default_factory=lambda: os.getenv("GEMINI_THINKING_LEVEL", "low").strip().lower())
+    model_timeout_ms: int = field(default_factory=lambda: int(os.getenv("GEMINI_TIMEOUT_MS", "90000")))
     cooling_off_days: int = field(default_factory=lambda: int(os.getenv("COOLING_OFF_DAYS", "1")))
     demo_skip_cooling: bool = field(default_factory=lambda: os.getenv("DEMO_SKIP_COOLING_OFF", "0") == "1")
     nonilion_allow_unverified: bool = field(default_factory=lambda: os.getenv("NONILION_DEV_ALLOW_UNVERIFIED", "0") == "1")
@@ -35,3 +38,7 @@ class Settings:
             raise RuntimeError("GEMINI_MODEL_FAST and GEMINI_MODEL_DEEP must be set to available model IDs.")
         if self.max_llm_calls_per_day < 1 or self.cooling_off_days < 1:
             raise RuntimeError("MAX_LLM_CALLS_PER_DAY and COOLING_OFF_DAYS must be positive.")
+        if self.thinking_level not in {"", "off", "minimal", "low", "medium", "high"}:
+            raise RuntimeError("GEMINI_THINKING_LEVEL must be one of minimal, low, medium, high, or off.")
+        if self.model_timeout_ms < 5000:
+            raise RuntimeError("GEMINI_TIMEOUT_MS must be at least 5000.")

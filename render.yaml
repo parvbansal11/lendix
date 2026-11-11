@@ -18,6 +18,10 @@ services:
         sync: false
       - key: GEMINI_MODEL_DEEP
         sync: false
+      - key: GEMINI_THINKING_LEVEL
+        value: low
+      - key: GEMINI_TIMEOUT_MS
+        value: "90000"
       - key: DB_PATH
         sync: false
       - key: OUTPUT_DIR

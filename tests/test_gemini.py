@@ -225,3 +225,34 @@ async def test_transport_closes_the_sdk(transport):
     client, _, _, _, _ = transport
     await client.close()
     client.sdk.aio.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_thinking_defaults_low_and_can_be_turned_off(transport):
+    client, settings, _, generate, _ = transport
+    await client.structured(AGENTS["Risk"], {"loan_id": "L-1043"})
+    assert generate.await_args.kwargs["config"].thinking_config.thinking_level.value == "LOW"
+    settings.thinking_level = "off"
+    await client.structured(AGENTS["Risk"], {"loan_id": "L-1043"})
+    assert generate.await_args.kwargs["config"].thinking_config is None
+
+
+def test_invalid_thinking_level_and_tiny_timeout_fail_at_boot():
+    with pytest.raises(RuntimeError, match="GEMINI_THINKING_LEVEL"):
+        Settings(gemini_api_key="x", model_fast="a", model_deep="b", thinking_level="extreme").validate()
+    with pytest.raises(RuntimeError, match="GEMINI_TIMEOUT_MS"):
+        Settings(gemini_api_key="x", model_fast="a", model_deep="b", model_timeout_ms=100).validate()
+
+
+@pytest.mark.asyncio
+async def test_sdk_timeouts_are_retried_as_transient(transport):
+    client, _, _, generate, sleep = transport
+
+    class ReadTimeout(Exception):
+        pass
+
+    ok = SimpleNamespace(parsed={"summary": "Recovered after a slow call."}, text=None, function_calls=[])
+    generate.side_effect = [ReadTimeout(), ok]
+    output = await client.structured(AGENTS["Risk"], {"loan_id": "L-1043"})
+    assert output.summary == "Recovered after a slow call."
+    assert sleep.await_count == 1
