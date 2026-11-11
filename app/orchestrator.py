@@ -69,7 +69,7 @@ class Orchestrator:
         else:
             self.event("progress", "Reporter", text)
 
-    async def document(self, kind, loan, data=None, format="pdf"):
+    async def document(self, kind, loan, data=None, format="pdf", operation_id=None):
         data = data or {}
         merged = {**loan, **loan.get("credit", {}), **data,
                   "loan_id": loan["id"], "date": utcnow().date().isoformat(),
@@ -83,6 +83,8 @@ class Orchestrator:
         artifact = await asyncio.to_thread(self.documents.render, kind, loan, data, format=format)
         self.event("status", "Reporter", f"{name} complete", loan)
         artifact["path"] = str(artifact["path"])
+        if operation_id:
+            artifact.update(operation_id=operation_id, operation_document=f"{kind}:{format}")
         saved = self.store.register_file(artifact, self.settings.public_base_url)
         self.event("document", "Reporter", f"Issued {kind}: {artifact['document_id']}", loan,
                    {"document_id": artifact["document_id"], "kind": kind})
@@ -92,6 +94,25 @@ class Orchestrator:
             self.event("file", "Reporter", saved["filename"], loan,
                        {k: v for k, v in saved.items() if k not in {"path", "token"}})
         return saved
+
+    async def operation_document(self, loan, operation_id, kind, data=None, format="pdf"):
+        """Resume an operation's artifacts without performing its transaction again."""
+        key = f"{kind}:{format}"
+        documents = loan.setdefault("operation_documents", {}).setdefault(operation_id, {})
+        # Registration precedes delivery. A failure during delivery must not render
+        # another document or repeat the operation on the next command.
+        existing = next((item for item in self.store.all("file")
+                         if item.get("loan_id") == loan["id"] and item.get("operation_id") == operation_id
+                         and item.get("operation_document") == key), None)
+        if existing:
+            if documents.get(key) != existing["document_id"]:
+                documents[key] = existing["document_id"]
+                self.save(loan)
+            return existing
+        artifact = await self.document(kind, loan, data, format, operation_id=operation_id)
+        documents[key] = artifact["document_id"]
+        self.save(loan)
+        return artifact
 
     def save(self, loan):
         return self.store.put("loan", loan["id"], loan)
@@ -117,7 +138,7 @@ class Orchestrator:
         if match and not loan:
             return await self.reply("I cannot find that loan. Use ‘list loans’ to see the synthetic applications.")
         # Safety gates execute before model routing and cannot be bypassed by instructions in chat.
-        if any(word in text for word in ("social media", "instagram", "facebook", "linkedin")):
+        if any(word in text for word in ("social media", "social profile", "social network")):
             return await self.reply("I only use consented application data. I cannot look up someone’s social media.", loan)
         if any(word in text for word in ("employer", "family", "friends", "third party", "third-party")) and any(word in text for word in ("contact", "message", "call", "tell", "send")):
             return await self.reply("I cannot contact an employer, family member, friend or other third party about a borrower’s debt. Fair practices require contacting the borrower directly and respectfully.", loan)
@@ -191,11 +212,13 @@ class Orchestrator:
             if loan.get("status") != "approved" or not loan.get("kfs_issued"):
                 return await self.reply("The officer must approve the loan and issue the KFS before you can accept it.", loan)
             if loan.get("kfs_accepted"):
+                await self.issue_agreement(loan)
                 return await self.reply("Your KFS acceptance is already recorded.", loan)
-            loan.update(kfs_accepted=True, kfs_accepted_at=now.isoformat(), kfs_accepted_by="borrower")
+            loan.update(kfs_accepted=True, kfs_accepted_at=now.isoformat(), kfs_accepted_by="borrower",
+                        acceptance_operation_id="ACCEPT-" + secrets.token_hex(6).upper())
             self.save(loan)
             self.event("decision", "Disbursement", "Borrower accepted the issued KFS.", loan)
-            await self.document("loan_agreement_summary", loan)
+            await self.issue_agreement(loan)
             return await self.reply("Your KFS acceptance is recorded. You can exit without penalty during the cooling-off period. Ops can request the simulated payout after the demo waiting gate.", loan)
         if loan and "disburse" in text:
             if role == "borrower":
@@ -240,7 +263,8 @@ class Orchestrator:
             loan["status"] = "awaiting_documents"
             self.save(loan)
             self.tool("Intake", "request_document", lambda: missing[0], loan)
-            return await self.reply(f"{loan['id']}: {missing[0]}", loan, "Intake")
+            notice = await self.document("missing_documents_request", loan, {"missing_documents": [missing[0]]}, "chat")
+            return await self.reply(f"{loan['id']}: {missing[0]}\nDocument {notice['document_id']} · {notice['created_at'][:10]}\n{WATERMARK}", loan, "Intake")
         if not loan.get("consent_recorded"):
             record = {"consented_to": ["identity checks", "income and affordability assessment", "loan servicing"],
                       "consented_at": loan.get("consented_at", loan.get("applied_at")),
@@ -288,16 +312,26 @@ class Orchestrator:
         return text if result["allowed"] else "Please review the deterministic findings in this document."
 
     async def decide(self, loan, message, role):
+        if loan.get("status") == "declined" and message.casefold().startswith("decline"):
+            if loan.get("rejection_reasons"):
+                await self.issue_rejection(loan)
+                return await self.reply("The existing decline decision is unchanged. Your rejection letter is ready with the recorded reasons.", loan)
+            return await self.reply("This loan was already declined. Ask the officer to inspect its recorded reasons.", loan)
+        if loan.get("status") == "approved" and message.casefold().startswith("approve") and not loan.get("kfs_issued"):
+            await self.issue_approval_documents(loan)
+            return await self.reply("The existing officer approval is unchanged. The sanction letter and KFS are now ready for borrower acceptance.", loan)
         if loan.get("status") != "awaiting_decision":
             return await self.reply("This loan is not awaiting a decision. Complete its document and risk review first, or inspect its existing decision.", loan)
         if message.casefold().startswith("decline"):
             reasons = loan["credit"].get("reasons") or ["The application does not meet the current lending criteria."]
             if "PAYOUT_NAME_MISMATCH" in loan["risk"]["codes"]:
                 reasons = ["The payout account is not in your name. Please use a verified bank account in your own name when applying again.", *reasons]
-            loan.update(status="declined", decision="decline", decision_by=role, decision_at=utcnow().isoformat(), rejection_reasons=reasons)
+            loan.update(status="declined", decision="decline", decision_by=role, decision_at=utcnow().isoformat(),
+                        decision_operation_id="DEC-" + secrets.token_hex(6).upper(), rejection_reasons=reasons)
             self.save(loan)
-            self.event("decision", "Credit", f"Officer declined {loan['id']}", loan, {"role": role, "reasons": reasons})
-            await self.document("rejection_letter", loan, {"reasons": reasons})
+            self.event("decision", "Credit", f"Officer declined {loan['id']}", loan,
+                       {"role": role, "reasons": reasons, "operation_id": loan["decision_operation_id"]})
+            await self.issue_rejection(loan)
             return await self.reply("Thank you for applying. We cannot proceed with this application. " + " ".join(reasons) + " Your rejection letter is attached.", loan)
         if loan["risk"]["band"] == "unverified":
             return await self.reply("Required sources are unavailable. Verify them and rerun the review before approving.", loan)
@@ -320,22 +354,60 @@ class Orchestrator:
         self.event("decision", "Credit", f"Officer approved INR {amount:,.2f}", loan,
                    {"role": role, "override_reason": loan["override_reason"]})
         self.handoff("Credit", "Disbursement", loan, "human approval recorded")
-        await self.document("sanction_letter", loan)
+        await self.issue_approval_documents(loan)
+        return await self.reply(f"Officer approval recorded for {loan['id']}: INR {amount:,.2f}. The sanction letter and KFS are ready. The borrower must read the KFS and type ‘accept KFS {loan['id']}’ before payout.", loan)
+
+    async def issue_approval_documents(self, loan):
+        if not loan.get("sanction_document_id"):
+            sanction = await self.document("sanction_letter", loan)
+            loan["sanction_document_id"] = sanction["document_id"]
+            self.save(loan)
         self.tool("Disbursement", "make_kfs", lambda: None, loan)
         kfs = await self.document("key_facts_statement", loan)
         loan.update(kfs_issued=True, kfs_document_id=kfs["document_id"], kfs_issued_at=utcnow().isoformat())
         self.save(loan)
-        return await self.reply(f"Officer approval recorded for {loan['id']}: INR {amount:,.2f}. The sanction letter and KFS are ready. The borrower must read the KFS and type ‘accept KFS {loan['id']}’ before payout.", loan)
+
+    async def issue_rejection(self, loan):
+        if not loan.get("decision_operation_id"):
+            loan["decision_operation_id"] = "DEC-" + secrets.token_hex(6).upper()
+            self.save(loan)
+        await self.operation_document(loan, loan["decision_operation_id"], "rejection_letter",
+                                      {"reasons": loan["rejection_reasons"]})
+
+    async def issue_agreement(self, loan):
+        if not loan.get("acceptance_operation_id"):
+            loan["acceptance_operation_id"] = "ACCEPT-" + secrets.token_hex(6).upper()
+            self.save(loan)
+        await self.operation_document(loan, loan["acceptance_operation_id"], "loan_agreement_summary")
+
+    async def issue_payout_documents(self, loan):
+        operation_id = loan["simulated_utr"]
+        await self.operation_document(loan, operation_id, "disbursement_advice")
+        await self.operation_document(loan, operation_id, "repayment_schedule", {"schedule": loan["schedule"]}, "csv")
+        await self.operation_document(loan, operation_id, "repayment_schedule", {"schedule": loan["schedule"]})
+
+    async def issue_closure_document(self, loan):
+        if not loan.get("closure_operation_id"):
+            loan["closure_operation_id"] = "CLOSE-" + secrets.token_hex(6).upper()
+            self.save(loan)
+        data = {"outstanding": 0}
+        if loan.get("exit_reason") == "cooling_off":
+            data["summary"] = "Cooling-off exit completed using a simulated principal return. No penalty was charged; no money moved."
+        await self.operation_document(loan, loan["closure_operation_id"], "no_dues_certificate", data)
 
     async def disburse(self, loan, now):
-        if loan.get("status") == "disbursed":
+        if loan.get("simulated_utr") and loan.get("status") in {"disbursed", "restructure_requested", "closed"}:
+            await self.issue_payout_documents(loan)
             return await self.reply("The simulated payout is already recorded; no duplicate payout was made.", loan)
+        if loan.get("status") == "disbursed":
+            return await self.reply("The seeded simulated payout is already recorded; no duplicate payout was made.", loan)
         if loan.get("status") != "approved":
             return await self.reply("The loan needs officer approval before a simulated payout.", loan)
         result = self.tool("Compliance", "check_disbursement",
                            lambda: check_disbursement(loan, now=now, demo_skip_cooling=self.settings.demo_skip_cooling), loan)
         if not result["allowed"]:
             return await self.reply("Payout blocked: " + "; ".join(result["reasons"]), loan)
+        await self.issue_agreement(loan)
         loan.update(status="disbursed", simulated_utr="SIM-" + secrets.token_hex(6).upper(),
                     disbursed_at=now.isoformat(), paid_installments=0, simulated=True)
         self.tool("Disbursement", "simulate_payout", lambda: None, loan)
@@ -345,10 +417,8 @@ class Orchestrator:
         self.save(loan)
         self.event("payout", "Disbursement", "Simulated payout recorded to the verified borrower account.", loan,
                    {"simulated_utr": loan["simulated_utr"], "cooling_wait_skipped": self.settings.demo_skip_cooling})
-        await self.document("disbursement_advice", loan)
         self.handoff("Disbursement", "Collections", loan, "simulated payout complete")
-        await self.document("repayment_schedule", loan, {"schedule": loan["schedule"]}, "csv")
-        await self.document("repayment_schedule", loan, {"schedule": loan["schedule"]})
+        await self.issue_payout_documents(loan)
         return await self.reply(f"Simulated payout complete for {loan['id']}. Reference {loan['simulated_utr']}. No money moved. Your repayment schedule is attached.", loan)
 
     def schedule(self, loan):
@@ -357,6 +427,11 @@ class Orchestrator:
         return self.tool("Collections", "emi_schedule", lambda: emi_schedule(loan), loan)
 
     async def payment(self, loan):
+        pending_receipts = [item for item in loan.get("payments", []) if not item.get("document_id")]
+        if pending_receipts:
+            for receipt in pending_receipts:
+                await self.issue_payment_receipt(loan, receipt)
+            return await self.reply("The receipt for your recorded simulated payment is now ready. No additional EMI was recorded; send a new payment command when you intend to pay the next installment.", loan)
         if loan.get("status") not in {"disbursed", "restructure_requested"}:
             return await self.reply("Payments can be recorded only against an active, disbursed loan.", loan)
         schedule = self.schedule(loan)
@@ -372,22 +447,30 @@ class Orchestrator:
         loan.setdefault("payments", []).append(receipt)
         self.save(loan)
         self.event("payment", "Collections", f"Recorded simulated EMI {count + 1}", loan, receipt)
-        await self.document("payment_receipt", loan, receipt)
+        await self.issue_payment_receipt(loan, receipt)
         return await self.reply(f"Simulated EMI {count + 1} recorded. Your receipt is attached.", loan)
+
+    async def issue_payment_receipt(self, loan, receipt):
+        artifact = await self.operation_document(loan, receipt["payment_reference"], "payment_receipt", receipt)
+        receipt["document_id"] = artifact["document_id"]
+        self.save(loan)
 
     async def close(self, loan):
         if loan.get("status") == "closed":
+            await self.issue_closure_document(loan)
             return await self.reply("This loan is already closed; the No Dues Certificate is in the documents panel.", loan)
         if loan.get("status") not in {"disbursed", "restructure_requested"}:
             return await self.reply("Only a disbursed loan can be closed.", loan)
         schedule = self.schedule(loan)
         count = loan.get("paid_installments", 0)
+        loan["closure_operation_id"] = "CLOSE-" + secrets.token_hex(6).upper()
         # This explicit demo command settles synthetic future installments; it is not a real payment.
         for index, row in enumerate(schedule[count:], count + 1):
-            self.event("payment", "Collections", f"Demo fast-forward: simulated EMI {index}", loan, row)
+            self.event("payment", "Collections", f"Demo fast-forward: simulated EMI {index}", loan,
+                       {**row, "operation_id": loan["closure_operation_id"]})
         loan.update(paid_installments=len(schedule), outstanding=0, outstanding_balance=0, status="closed", closed_at=utcnow().isoformat())
         self.save(loan)
-        await self.document("no_dues_certificate", loan, {"outstanding": 0})
+        await self.issue_closure_document(loan)
         return await self.reply("Demo fast-forward completed: all remaining installments were settled with simulated payments. The loan is closed and the No Dues Certificate is attached.", loan)
 
     async def hardship(self, loan, message):
@@ -404,6 +487,11 @@ class Orchestrator:
         return await self.reply("I’m sorry you’re going through this. I have prepared a restructure request for the credit officer. They will review possible options; no revised terms are approved yet.", loan, "Collections")
 
     async def exit_loan(self, loan, now):
+        if loan.get("status") == "closed" and loan.get("exit_reason") == "cooling_off":
+            await self.issue_closure_document(loan)
+            return await self.reply("Your cooling-off exit is already recorded. The No Dues Certificate is ready; no additional simulated principal return was recorded.", loan)
+        if loan.get("status") == "withdrawn":
+            return await self.reply("Your loan was already withdrawn before payout. No money moved and no penalty is payable.", loan)
         if loan.get("status") == "approved":
             loan.update(status="withdrawn", withdrawn_at=now.isoformat(), exit_penalty=0)
             self.save(loan)
@@ -415,11 +503,12 @@ class Orchestrator:
         if now > started + timedelta(days=loan.get("cooling_off_days", self.settings.cooling_off_days)):
             return await self.reply("The cooling-off window has ended. I can ask the credit officer to review an early repayment request.", loan)
         loan.update(status="closed", outstanding=0, outstanding_balance=0, closed_at=now.isoformat(), exit_penalty=0,
-                    exit_reason="cooling_off", simulated_refund=loan["approved_amount"])
+                    exit_reason="cooling_off", simulated_refund=loan["approved_amount"],
+                    closure_operation_id="CLOSE-" + secrets.token_hex(6).upper())
         self.save(loan)
         self.event("payment", "Collections", "Simulated principal return during cooling-off; zero penalty. No money moved.", loan,
-                   {"simulated_principal_return": loan["approved_amount"], "penalty": 0})
-        await self.document("no_dues_certificate", loan, {"outstanding": 0, "summary": "Cooling-off exit completed using a simulated principal return. No penalty was charged; no money moved."})
+                   {"simulated_principal_return": loan["approved_amount"], "penalty": 0, "operation_id": loan["closure_operation_id"]})
+        await self.issue_closure_document(loan)
         return await self.reply("Cooling-off exit completed in the simulation. The principal return is simulated, the penalty is zero, and your No Dues Certificate is attached. No money moved.", loan)
 
     async def grievance(self, loan, message, role):
@@ -447,6 +536,10 @@ class Orchestrator:
         if not result["allowed"]:
             return await self.reply("The reminder is blocked by the contact policy.", loan)
         self.tool("Collections", "draft_reminder", lambda: message, loan)
+        schedule = self.schedule(loan)
+        due = schedule[min(loan.get("paid_installments", 0), len(schedule) - 1)]
+        notice = await self.document("payment_reminder", loan, {"amount_due": due["emi"], "due_date": due["due_date"], "summary": message}, "chat")
+        message += f"\nDocument {notice['document_id']} · {notice['created_at'][:10]}\n{WATERMARK}"
         return await self.reply(message, loan, "Collections")
 
     async def deliver_due_reminders(self, now=None):

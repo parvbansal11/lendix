@@ -147,8 +147,9 @@ async def test_daily_call_budget_blocks_before_contacting_provider(transport):
     client, settings, store, generate, _ = transport
     settings.max_llm_calls_per_day = 1
     await client.structured(AGENTS["Risk"], {})
+    another_client = GeminiClient(settings, store, sdk=client.sdk)
     with pytest.raises(ModelBudgetExceeded, match="daily model-call limit"):
-        await client.structured(AGENTS["Risk"], {})
+        await another_client.structured(AGENTS["Risk"], {})
     assert generate.await_count == 1
     assert quota_calls(store) == 1
 
