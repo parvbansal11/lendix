@@ -71,7 +71,7 @@ def metadata():
 
 def kfs():
     return dict(metadata(), loan_amount=200000, apr=.19, fees=2000, emi=9984.82, tenure_months=24,
-                total_cost=241635.66, cooling_off_days=1, grievance_contact="grievances@saakh.example", exit_without_penalty=True)
+                total_cost=241635.66, cooling_off_days=1, grievance_contact="grievances@lendix.example", exit_without_penalty=True)
 
 
 @pytest.mark.parametrize("key", ["loan_id", "date", "document_id", "watermark"])

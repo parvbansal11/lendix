@@ -77,7 +77,7 @@ def _field(loan: dict, data: dict, key: str) -> Any:
         if isinstance(account, dict):
             account = account.get("number") or account.get("account_number")
         return str(account)[-4:] if account else None
-    defaults = {"foir_cap": 0.5, "resolution_window": "30 days", "grievance_contact": "grievance@saakh.example"}
+    defaults = {"foir_cap": 0.5, "resolution_window": "30 days", "grievance_contact": "grievance@lendix.example"}
     return defaults.get(key)
 
 
@@ -229,7 +229,7 @@ class DocumentService:
         styles.add(ParagraphStyle(name="Label", parent=styles["Cell"], fontName="Helvetica-Bold"))
         styles.add(ParagraphStyle(name="Small", parent=styles["Body"], fontSize=8, leading=11))
         para = lambda value, style="Body": Paragraph(escape(_text(value)).replace("\n", "<br/>"), styles[style])
-        story = [para("SAAKH FINANCE", "Label"), Spacer(1, 5 * mm), para(template.title, "ReportTitle"),
+        story = [para("LENDIX FINANCE", "Label"), Spacer(1, 5 * mm), para(template.title, "ReportTitle"),
                  para(f"Loan {metadata['loan_id']}  /  {metadata['date']}", "Small"),
                  para(f"Applicant: {loan.get('name', 'Portfolio / office record')}", "Label"),
                  Spacer(1, 3 * mm), para(template.introduction)]
@@ -289,7 +289,7 @@ class DocumentService:
             canvas.drawRightString(191 * mm, 13 * mm, f"Page {doc.page}")
             canvas.restoreState()
         doc = SimpleDocTemplate(str(path), pagesize=A4, rightMargin=19 * mm, leftMargin=19 * mm,
-                                topMargin=17 * mm, bottomMargin=30 * mm, title=template.title, author="Saakh Finance")
+                                topMargin=17 * mm, bottomMargin=30 * mm, title=template.title, author="Lendix Finance")
         doc.build(story, onFirstPage=footer, onLaterPages=footer)
 
     def _table_file(self, path: Path, kind: str, loan: dict, data: dict, metadata: dict, format: str):
@@ -310,7 +310,7 @@ class DocumentService:
         workbook = Workbook()
         sheet = workbook.active
         sheet.title = "Review queue"
-        sheet.append(["Saakh Finance - Daily review queue"])
+        sheet.append(["Lendix Finance - Daily review queue"])
         sheet.merge_cells("A1:F1")
         sheet["A1"].font = Font(name="Calibri", size=18, bold=True, color="173B46")
         sheet.row_dimensions[1].height = 32
@@ -360,7 +360,7 @@ class DocumentService:
         from matplotlib.ticker import MaxNLocator
         figure = Figure(figsize=(12, 6.8), dpi=150, facecolor="#f8fbfb")
         FigureCanvasAgg(figure)
-        figure.text(.06, .94, "SAAKH FINANCE", fontsize=11, weight="bold", color="#4c6b70")
+        figure.text(.06, .94, "LENDIX FINANCE", fontsize=11, weight="bold", color="#4c6b70")
         if kind == "portfolio_dashboard":
             loans = data.get("loans", data.get("rows", []))
             bands = Counter((item.get("risk") or {}).get("band", item.get("risk_band", "unverified")) for item in loans)

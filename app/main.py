@@ -67,7 +67,7 @@ def create_app(settings=None, model=None):
             await client.close()
         store.engine.dispose()
 
-    app = FastAPI(title="Saakh Finance", lifespan=lifespan,
+    app = FastAPI(title="Lendix Finance", lifespan=lifespan,
                   docs_url="/docs" if settings.env == "dev" else None,
                   redoc_url="/redoc" if settings.env == "dev" else None,
                   openapi_url="/openapi.json" if settings.env == "dev" else None)

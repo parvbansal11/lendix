@@ -212,6 +212,6 @@ def emi_schedule(loan: dict, start_date: date | str | None = None) -> list[dict]
 def bureau_lookup(loan: dict) -> dict:
     """Return a labeled fixture, never a real bureau lookup or default prediction."""
     fixture = loan.get("bureau_fixture") or {}
-    return {"synthetic": True, "source": "Saakh synthetic fixture", "score": int(fixture.get("score", 725)),
+    return {"synthetic": True, "source": "Lendix synthetic fixture", "score": int(fixture.get("score", 725)),
             "past_due_accounts": int(fixture.get("past_due_accounts", 0)), "existing_emi": float(_decimal(loan.get("existing_emi"))),
             "disclaimer": "Demonstration data only; this is not a prediction of a person's future repayment."}

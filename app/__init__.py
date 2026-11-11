@@ -1,1 +1,1 @@
-"""Saakh Finance synthetic lending office."""
+"""Lendix Finance synthetic lending office."""

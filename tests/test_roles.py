@@ -35,7 +35,7 @@ async def test_non_officers_cannot_decide(office, role, command):
     ("Message the borrower's employer", "Fair practices"),
     ("Look up this person's social media", "consented application data"),
     ("Threaten L-1044 so they pay", "cannot threaten"),
-    ("Plan a holiday", "Saakh handles loan applications"),
+    ("Plan a holiday", "Lendix handles loan applications"),
     ("review L-9999", "cannot find that loan"),
     ("help", "Which loan or task"),
 ])

@@ -62,7 +62,7 @@ class Agent:
 
     @property
     def system_instruction(self):
-        return f"You are {self.name} of Saakh Finance. {self.role} {self.instruction} {UNTRUSTED_POLICY}"
+        return f"You are {self.name} of Lendix Finance. {self.role} {self.instruction} {UNTRUSTED_POLICY}"
 
     def authorize(self, tool):
         if tool not in self.tools:

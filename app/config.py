@@ -16,7 +16,7 @@ class Settings:
     gemini_api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""), repr=False)
     model_fast: str = field(default_factory=lambda: os.getenv("GEMINI_MODEL_FAST", ""))
     model_deep: str = field(default_factory=lambda: os.getenv("GEMINI_MODEL_DEEP", ""))
-    db_path: str = field(default_factory=lambda: os.getenv("DB_PATH", "var/saakh.db"))
+    db_path: str = field(default_factory=lambda: os.getenv("DB_PATH", "var/lendix.db"))
     output_dir: str = field(default_factory=lambda: os.getenv("OUTPUT_DIR", "out"))
     env: str = field(default_factory=lambda: os.getenv("ENV", "production"))
     public_base_url: str = field(default_factory=lambda: os.getenv("PUBLIC_BASE_URL", "").rstrip("/"))
@@ -29,7 +29,7 @@ class Settings:
 
     def validate(self):
         if not self.gemini_api_key:
-            raise RuntimeError("GEMINI_API_KEY is required; set it in the environment before starting Saakh.")
+            raise RuntimeError("GEMINI_API_KEY is required; set it in the environment before starting Lendix.")
         if not self.model_fast or not self.model_deep:
             raise RuntimeError("GEMINI_MODEL_FAST and GEMINI_MODEL_DEEP must be set to available model IDs.")
         if self.max_llm_calls_per_day < 1 or self.cooling_off_days < 1:

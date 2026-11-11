@@ -23,7 +23,7 @@ def loan():
         "risk": {"band": "low", "flags": [], "source_status": "verified"},
         "consent": True, "consent_at": "2026-11-11T08:30:00+05:30", "consent_by": "Meera Vasant",
         "consent_purposes": ["Identity verification", "Income verification"],
-        "cooling_off_days": 3, "grievance_contact": "grievances@saakh.example",
+        "cooling_off_days": 3, "grievance_contact": "grievances@lendix.example",
         "documents": ["identity", "income_statement"], "missing_documents": [],
     }
 
@@ -48,7 +48,7 @@ def test_required_pdf_templates_have_identity_and_watermark(tmp_path, loan, kind
 def test_kfs_discloses_all_required_terms(tmp_path, loan):
     artifact = DocumentService(tmp_path).render("kfs", loan)
     text = "\n".join(p.extract_text() for p in PdfReader(artifact["path"]).pages)
-    for value in ("150,000.00", "17.21%", "processing: 1500", "tax: 270", "13,538.75", "14,235.00", "Cooling-off", "grievances@saakh.example", "without penalty"):
+    for value in ("150,000.00", "17.21%", "processing: 1500", "tax: 270", "13,538.75", "14,235.00", "Cooling-off", "grievances@lendix.example", "without penalty"):
         assert value in text
     assert "15.00%" in text
     assert "164,235.00" in text

@@ -1,4 +1,4 @@
-# Saakh
+# Lendix
 
 **A lending office where AI agents do the paperwork and a human makes the call.**
 
@@ -8,7 +8,7 @@
 ![Render](https://img.shields.io/badge/Render-deployment_config-46E3B7)
 [![Tests passing](https://img.shields.io/badge/tests-passing-brightgreen)](.github/workflows/tests.yml)
 
-Saakh Finance is a fictional lender with eight specialist agents, 25 synthetic applications, visible handoffs and usable loan documents. Watch a mismatched payout account become a risk report, an officer decision and a respectful rejection letter. Follow a clean loan through disclosures, a simulated payout, repayments and closure.
+Lendix Finance is a fictional lender with eight specialist agents, 25 synthetic applications, visible handoffs and usable loan documents. Watch a mismatched payout account become a risk report, an officer decision and a respectful rejection letter. Follow a clean loan through disclosures, a simulated payout, repayments and closure.
 
 **Current status:** the local console and mocked end-to-end flows are implemented and tested. Real Gemini wiring is implemented; a live run requires your key and model IDs. The Nonilion adapter is an explicit stub awaiting its Bot API guide. No live Nonilion connection or hosted deployment is claimed.
 
@@ -174,7 +174,7 @@ The script prints the event log and writes its isolated demo database and genera
 | `GEMINI_API_KEY` | Required; no default | Your private API key, entered in the dashboard |
 | `GEMINI_MODEL_FAST` | Required; no default | An available Flash-tier model ID |
 | `GEMINI_MODEL_DEEP` | Required; no default | An available Pro-tier model ID |
-| `DB_PATH` | `var/saakh.db` | `/var/data/saakh.db` |
+| `DB_PATH` | `var/lendix.db` | `/var/data/lendix.db` |
 | `OUTPUT_DIR` | `out` | `/var/data/files` |
 | `ENV` | `production` | `production`; use `dev` locally only when API docs are needed |
 | `PUBLIC_BASE_URL` | Empty, for relative local links | Your service's HTTPS base URL, without a trailing slash |

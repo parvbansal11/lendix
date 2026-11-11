@@ -163,6 +163,6 @@ def check_document(kind: str, data: dict) -> dict:
 
 def grievance_acknowledgment(reference: str) -> str:
     return (f"Your grievance has been recorded with reference {reference}. We will work to resolve it within 30 days. "
-            "Contact the Saakh Finance grievance officer at grievances@saakh.example. If your complaint remains unresolved "
+            "Contact the Lendix Finance grievance officer at grievances@lendix.example. If your complaint remains unresolved "
             "after 30 days, or you are dissatisfied with the response, you may escalate to the RBI Ombudsman through "
             "the complaint management portal at https://cms.rbi.org.in/. This acknowledgment uses synthetic demo data.")

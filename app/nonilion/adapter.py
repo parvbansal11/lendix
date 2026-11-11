@@ -33,7 +33,7 @@ class LocalAdapter(Adapter):
         return await self.orchestrator.run(event["message"], event["role"], event["conversation_id"])
 
     async def send_reply(self, conversation_id, markdown):
-        self.store.emit("reply", "Saakh", markdown, conversation_id=conversation_id)
+        self.store.emit("reply", "Lendix", markdown, conversation_id=conversation_id)
 
     async def send_file(self, conversation_id, url, filename):
         self.store.emit("file", "Reporter", filename, conversation_id=conversation_id,

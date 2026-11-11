@@ -1,5 +1,5 @@
 [project]
-name = "saakh"
+name = "lendix"
 version = "0.1.0"
 description = "A lending office where AI agents do the paperwork and a human makes the call"
 requires-python = ">=3.12,<3.13"

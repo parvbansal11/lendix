@@ -20,7 +20,7 @@ async def run(mock=False):
     load_dotenv(ROOT / ".env", override=False)
     run_id = utcnow().strftime("%Y%m%d-%H%M%S-%f")
     output = ROOT / "out" / "demo" / run_id
-    settings = Settings(db_path=str(output / "saakh.db"), output_dir=str(output / "documents"), demo_skip_cooling=True)
+    settings = Settings(db_path=str(output / "lendix.db"), output_dir=str(output / "documents"), demo_skip_cooling=True)
     if not mock:
         settings.validate()
     store = Store(settings.db_path)
@@ -39,7 +39,7 @@ async def run(mock=False):
         ("ops", "close L-1043"),
         ("borrower", "I lost my job and can't pay L-1044"),
     ]
-    print("Saakh Finance · synthetic demo · " + ("mock model" if mock else "live model"))
+    print("Lendix Finance · synthetic demo · " + ("mock model" if mock else "live model"))
     print("Cooling wait skipped for this isolated demonstration; no money moves.")
     try:
         for role, message in steps:

@@ -16,7 +16,7 @@ from .tools import bureau_lookup, compute_affordability, emi_schedule, validate_
 
 IST = ZoneInfo("Asia/Kolkata")
 WATERMARK = "SPECIMEN · SYNTHETIC DEMO DATA · NOT A LEGAL DOCUMENT"
-HELP = "Saakh handles loan applications, document checks, risk reviews, officer decisions, repayments and complaints. Try ‘review L-1042’, ‘list loans’, or tell me which lending task you need."
+HELP = "Lendix handles loan applications, document checks, risk reviews, officer decisions, repayments and complaints. Try ‘review L-1042’, ‘list loans’, or tell me which lending task you need."
 
 
 class Orchestrator:
@@ -348,7 +348,7 @@ class Orchestrator:
         loan["credit"].update({k: v for k, v in approved_terms.items() if k not in {"summary", "reasons", "recommendation"}})
         loan.update(status="approved", human_approved=True, approved_by_role=role,
                     approved_at=utcnow().isoformat(), override_reason=reason.group(1) if reason else None,
-                    cooling_off_days=self.settings.cooling_off_days, grievance_contact="grievance@saakh.example",
+                    cooling_off_days=self.settings.cooling_off_days, grievance_contact="grievance@lendix.example",
                     kfs_accepted=False)
         self.save(loan)
         self.event("decision", "Credit", f"Officer approved INR {amount:,.2f}", loan,
