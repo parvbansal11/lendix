@@ -5,7 +5,9 @@ from app.compliance import WATERMARK, check_disbursement, check_document, check_
 
 def payout_ready():
     return {"id": "L-7000", "name": "Mira Desai", "payout_name": "Desai M", "payout_account": "SYN-OWN-7000",
-            "account_verified": True, "consent": True, "human_approved": True, "approved_by_role": "credit_officer",
+            "account_verified": True, "consent": True, "approval_source": "policy", "approved_amount": 200000,
+            "underwriting": {"decision": "approve", "policy_version": 1, "rule": "automatic approval", "approved_amount": 200000,
+                             "inputs": {"risk_band": "low", "foir": .4, "requested_amount": 200000}, "reasons": ["All automatic approval conditions are met."]},
             "approved_at": "2026-11-09T10:00:00+05:30", "kfs_issued": True, "kfs_issued_at": "2026-11-09T10:30:00+05:30",
             "kfs_accepted": True, "kfs_accepted_at": "2026-11-09T11:00:00+05:30", "cooling_off_days": 1, "risk_band": "low"}
 
@@ -17,7 +19,7 @@ def test_abuse_threats_third_parties_and_false_promises_blocked(text):
     assert result["reasons"]
 
 
-@pytest.mark.parametrize("text", ["A credit officer will review your application.", "We cannot contact your employer.", "We never contact your family.", "We do not offer guaranteed approval.", "There are no hidden fees."])
+@pytest.mark.parametrize("text", ["The written policy will determine the application outcome.", "We cannot contact your employer.", "We never contact your family.", "We do not offer guaranteed approval.", "There are no hidden fees."])
 def test_polite_replies_and_explicit_refusals_allowed(text):
     assert check_message(text)["allowed"] is True
 
@@ -40,7 +42,7 @@ def test_disbursement_all_prerequisites():
     assert check_disbursement(payout_ready(), now="2026-11-11T12:00:00+05:30")["allowed"]
 
 
-@pytest.mark.parametrize("field,value", [("human_approved", False), ("approved_by_role", "ops"), ("approved_at", None), ("account_verified", False), ("payout_name", "Different Person"), ("payout_account", None), ("payout_account_type", "pool"), ("payout_account_type", "third_party"), ("consent", False), ("kfs_issued", False), ("kfs_accepted", False), ("kfs_accepted_at", None), ("kfs_accepted_at", "2026-11-12T12:00:00+05:30"), ("cooling_off_days", 0), ("risk_band", "unverified")])
+@pytest.mark.parametrize("field,value", [("approval_source", "model"), ("approval_source", None), ("underwriting", {}), ("approved_amount", 250000), ("approved_at", None), ("account_verified", False), ("payout_name", "Different Person"), ("payout_account", None), ("payout_account_type", "pool"), ("payout_account_type", "third_party"), ("consent", False), ("kfs_issued", False), ("kfs_accepted", False), ("kfs_accepted_at", None), ("kfs_accepted_at", "2026-11-12T12:00:00+05:30"), ("cooling_off_days", 0), ("risk_band", "unverified")])
 def test_disbursement_prerequisite_failures(field, value):
     loan = dict(payout_ready(), **{field: value})
     assert not check_disbursement(loan, now="2026-11-11T12:00:00+05:30")["allowed"]
@@ -51,18 +53,46 @@ def test_actual_elapsed_wait_and_demo_override():
     now = "2026-11-09T12:00:00+05:30"
     assert not check_disbursement(loan, now=now)["allowed"]
     assert check_disbursement(loan, now=now, demo_skip_cooling=True)["allowed"]
-    loan["human_approved"] = False
+    loan["approval_source"] = "model"
     assert not check_disbursement(loan, now=now, demo_skip_cooling=True)["allowed"]
 
 
-def test_high_band_requires_logged_override_reason_but_never_third_party_payout():
-    loan = dict(payout_ready(), risk_band="high")
+def test_risk_head_requires_logged_override_reason_but_never_third_party_payout():
+    loan = dict(payout_ready(), risk_band="high", approval_source="risk_head", approved_by_role="risk_head",
+                human_approved=True, escalated_for_decision=True)
     now = "2026-11-11T12:00:00+05:30"
     assert not check_disbursement(loan, now=now)["allowed"]
     loan["override_reason"] = "Reviewed supporting verification; documented exception."
     assert check_disbursement(loan, now=now)["allowed"]
     loan["payout_name"] = "Another Person"
     assert not check_disbursement(loan, now=now)["allowed"]
+
+
+@pytest.mark.parametrize("field,value", [("human_approved", False), ("approved_by_role", "ops"), ("escalated_for_decision", False), ("override_reason", ""), ("override_reason", "   "), ("approval_source", "model")])
+def test_risk_head_authority_requires_all_recorded_conditions(field, value):
+    loan = dict(payout_ready(), approval_source="risk_head", approved_by_role="risk_head", human_approved=True,
+                escalated_for_decision=True, override_reason="Reviewed the documented exception.", underwriting={})
+    assert check_disbursement(loan, now="2026-11-11T12:00:00+05:30")["allowed"]
+    loan[field] = value
+    assert not check_disbursement(loan, now="2026-11-11T12:00:00+05:30")["allowed"]
+
+
+@pytest.mark.parametrize("field,value", [("decision", "escalate"), ("decision", "decline"), ("policy_version", True), ("policy_version", 0), ("rule", ""), ("inputs", {}), ("reasons", []), ("reasons", [""]), ("approved_amount", None)])
+def test_policy_authority_requires_recorded_decision_evidence(field, value):
+    loan = payout_ready()
+    loan["underwriting"][field] = value
+    assert not check_disbursement(loan, now="2026-11-11T12:00:00+05:30")["allowed"]
+
+
+def test_policy_approval_does_not_require_human_approval():
+    loan = payout_ready()
+    assert not loan.get("human_approved")
+    assert check_disbursement(loan, now="2026-11-11T12:00:00+05:30")["allowed"]
+
+
+def test_role_label_alone_cannot_authorize_a_payout():
+    loan = dict(payout_ready(), approval_source=None, underwriting={}, approved_by_role="risk_head", human_approved=True)
+    assert not check_disbursement(loan, now="2026-11-11T12:00:00+05:30")["allowed"]
 
 
 def metadata():

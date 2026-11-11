@@ -1,6 +1,6 @@
 # Lendix
 
-**A lending office where AI agents do the paperwork and a human makes the call.**
+**A lending office run by AI agents, end to end.**
 
 ![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB)
 ![FastAPI](https://img.shields.io/badge/FastAPI-web_service-009688)
@@ -8,133 +8,145 @@
 ![Render](https://img.shields.io/badge/Render-deployment_config-46E3B7)
 [![Tests passing](https://img.shields.io/badge/tests-passing-brightgreen)](.github/workflows/tests.yml)
 
-Lendix Finance is a fictional lender with eight specialist agents, 25 synthetic applications, visible handoffs and usable loan documents. Watch a mismatched payout account become a risk report, an officer decision and a respectful rejection letter. Follow a clean loan through disclosures, a simulated payout, repayments and closure.
+Lendix Finance is a fictional lender with nine agents and 25 synthetic applications. Its Underwriter applies a written policy: decline a mismatched account, approve a clean ₹1 lakh loan, or escalate a ₹3 lakh exception to the risk head. Every outcome comes with its rule, evidence and documents.
 
-**Current status:** the local console and mocked end-to-end flows are implemented and tested. Real Gemini wiring is implemented; a live run requires your key and model IDs. The Nonilion adapter is an explicit stub awaiting its Bot API guide. No live Nonilion connection or hosted deployment is claimed.
+**Build status:** the local console, policy engine, documents and mocked lifecycle flows work. Gemini wiring is implemented; live validation needs your key and model IDs. The Nonilion adapter awaits its Bot API guide. A hosted deployment and live office connection have not been verified.
 
 ## The problem
 
-Small lenders spend hours assembling applications, checking documents, reconciling names, calculating affordability and preparing letters. Details can disagree across those records, and a risky payout account can slip through. Officers need a traceable case with clear reasons and complete paperwork before making a decision.
+Small lenders drown in manual document checks, affordability calculations and paperwork. Fraud can slip through mismatched details. A written policy should produce consistent decisions, explain each result and send exceptions to the people best equipped to resolve them.
 
 ## Who it is for
 
-- **Credit officers:** review evidence, decide each application and explain any high-risk override.
-- **Operations teams:** collect missing documents, prepare disclosures, track payments and handle queues.
-- **Borrowers:** receive clear requests, understandable decisions and respectful support when repayment becomes difficult.
+- **The risk team:** writes the credit policy, receives FYI updates on automatic decisions and handles exceptions.
+- **The risk head:** approves, approves a reduced amount or declines escalated applications, always with a typed reason.
+- **Operations and borrowers:** exchange documents, accept disclosures, track simulated repayments and request support.
 
-The console is a public demonstration with synthetic data. Its role selector demonstrates workflow permissions; it is **not authentication** and does not isolate one borrower's data from another.
+The public demo role selector demonstrates permissions; it is not authentication or borrower data isolation. All data must remain synthetic.
 
 ## The agent team and handoffs
 
 ```mermaid
 flowchart TD
-    Person[Borrower or operations team] --> FrontDesk[Front Desk]
-    FrontDesk <--> Office[Orchestrator]
+    Person[Borrower or operations] --> FrontDesk[Front Desk]
+    FrontDesk <--> Office[Orchestrator and audit trail]
     Office <--> Intake[Intake]
-    Office <--> Risk[Risk]
-    Office <--> Credit[Credit]
+    Office <--> Risk[Risk: deterministic checks]
+    Office <--> Credit[Credit: affordability calculations]
+    Office <--> Underwriter[Underwriter: apply written policy]
+    Underwriter -.-> Policy[config/credit_policy.yaml]
+    Office -->|Escalated exceptions| RiskHead[Risk head: typed reason]
+    RiskHead --> Office
     Office <--> Compliance[Compliance]
-    Officer[Human credit officer] -->|Approve or decline| Office
     Office <--> Disbursement[Disbursement]
     Office <--> Collections[Collections]
-    Office <--> Reporter[Reporter]
-    Office --> Audit[SQLite event and audit trail]
-    Reporter --> Results[Chat, documents, charts and progress]
+    Office <--> Reporter[Reporter: files, chart, FYI and mentions]
 ```
 
-Agents have their own instructions, output schemas and tool allowlists. They hand work through the orchestrator. Python computes risk bands, affordability, EMI schedules and document fields. Gemini extracts supplied facts and drafts short explanations; it never determines the numeric risk result or approves credit.
+Every handoff goes through the orchestrator and is recorded. Agents do not call one another. Python determines risk, affordability and decisions. The model supplies routing, extraction and short explanations.
 
 ## The agents
 
-| Agent | Role | Tools | Produces |
-|---|---|---|---|
-| Front Desk | Route requests, clarify and log grievances | `list_loans`, `get_loan`, `route`, `log_grievance` | Replies, follow-up questions, grievance acknowledgment |
-| Intake | Validate application fields, documents and explicit consent | `parse_upload`, `validate_application`, `request_document` | Application acknowledgment, missing-item request, consent record, KYC summary |
-| Risk | Apply six deterministic verification rules | `run_risk_checks` | Reason codes, risk report, inputs for a risk chart |
-| Credit | Calculate affordability and recommend an outcome | `compute_affordability`, `bureau_lookup`, `draft_decision_note` | Officer appraisal with FOIR, EMI, eligible amount and APR |
-| Compliance | Check messages, documents and payout prerequisites | `check_message`, `check_document`, `check_disbursement` | Allowed/blocked result with reasons |
-| Disbursement | Issue terms and simulate an authorized payout | `make_kfs`, `simulate_payout` | Sanction letter, KFS, agreement summary, simulated disbursement advice |
-| Collections | Record payments and support borrowers in difficulty | `emi_schedule`, `record_payment`, `draft_reminder`, `request_restructure` | Schedules, receipts, reminders, restructure note, No Dues Certificate |
-| Reporter | Render artifacts and report progress | `make_document`, `make_chart`, `post_update`, `mention` | PDFs, CSV, Excel, JSON, charts and officer mentions |
+| Agent | Role and tools | Produces |
+|---|---|---|
+| Front Desk | Route requests and log grievances: `list_loans`, `get_loan`, `route`, `log_grievance` | Replies, clarification and grievance acknowledgment |
+| Intake | Collect and validate facts: `parse_upload`, `validate_application`, `request_document` | Acknowledgment, missing-item request, consent JSON/PDF, KYC summary |
+| Risk | Run six fixed rules: `run_risk_checks` | Reason codes, band, report and chart inputs |
+| Credit | Calculate numbers: `compute_affordability`, `bureau_lookup` | FOIR, max EMI, eligible amount, tenure and APR |
+| Underwriter | Apply policy and explain its rule: `apply_policy`, `draft_decision_note`, `escalate` | Logged decision or escalation and decision-note PDF |
+| Compliance | Enforce boundaries: `check_message`, `check_document`, `check_disbursement` | Allowed/blocked result and reasons |
+| Disbursement | Issue terms and simulate payout: `make_kfs`, `simulate_payout` | Sanction, KFS, agreement summary and simulated advice |
+| Collections | Service the loan: `emi_schedule`, `record_payment`, `draft_reminder`, `request_restructure` | Schedule, receipts, polite reminders, hardship note and No Dues Certificate |
+| Reporter | Render and deliver: `make_document`, `make_chart`, `post_update`, `mention` | PDF, CSV, Excel, JSON, PNG, progress, FYIs and mentions |
 
 ## A lifecycle walkthrough
 
-| Stage | What happens | Artifacts |
+| Stage | Action | Documents and outputs |
 |---|---|---|
-| Application | Intake asks for one missing item at a time and records consent | Acknowledgment PDF + chat; missing-documents checklist; consent JSON + PDF; KYC summary PDF |
-| Risk | Check payout names, DOB, recent applications, shared accounts, phone age and income gaps | Risk report PDF + PNG chart |
-| Credit review | Apply a 50% FOIR cap and calculate amount, EMI and APR | Credit appraisal / decision note PDF |
-| Officer decision | An officer approves, approves a lower amount or declines | Sanction PDF or rejection PDF + chat |
-| Disclosures | Show all fees, APR, repayments, cooling-off terms and grievance contact; record borrower acceptance | KFS PDF; loan agreement summary PDF |
-| Simulated payout | Check human approval, accepted KFS, waiting gate and the borrower's verified account | Disbursement advice PDF with simulated UTR |
-| Collections | Produce the amortization schedule, record simulated payments and send polite reminders during permitted hours | Schedule CSV + PDF; receipt PDF; reminder chat |
-| Hardship and closure | Refer changed terms to an officer; close only through an explicit simulated settlement | Restructure request PDF; No Dues Certificate PDF |
-| Grievances and oversight | Acknowledge complaints, list cases and export recorded actions | Grievance acknowledgment PDF + chat; review queue CSV + Excel; portfolio PNG; officer-only audit JSON |
+| Application | Ask for one missing item at a time; record explicit consent | Acknowledgment PDF/chat, missing-documents checklist, consent JSON/PDF, KYC PDF |
+| Risk | Compare identity, payout name, phone age, recent applications, shared accounts and income | Risk report PDF and PNG |
+| Credit | Compute affordability with a 50% FOIR cap | Deterministic financial inputs for underwriting |
+| Underwriting | Apply decline rules first, approval rules second, otherwise escalate | Decision-note PDF with policy version, rule, input snapshot and reasons |
+| Automatic outcome | Approve or decline by policy; post an FYI to the risk team | Sanction/KFS or rejection PDF/chat, decision note and chart |
+| Escalation | Mention the risk head and request an office walk; wait for a reasoned decision | Escalated queue, note/chart and risk-head decision audit |
+| KFS and payout | Record borrower acceptance, enforce waiting and verified-account gates | KFS, agreement summary, simulated disbursement advice |
+| Collections | Schedule installments and record simulated payments | Repayment CSV/PDF, receipt PDF, reminder chat |
+| Hardship and closure | Escalate restructure requests; settle the synthetic loan | Restructure note, escalation decision note, No Dues Certificate |
+| Oversight | Acknowledge complaints and export review results | Grievance PDF/chat, queue CSV/Excel with outcome counts, dashboard PNG, risk-head-only audit JSON |
 
-Templates live in [`app/documents/`](app/documents/). Generated artifacts include a loan ID, date, short document ID and the watermark **“SPECIMEN · SYNTHETIC DEMO DATA · NOT A LEGAL DOCUMENT.”** IDs are recorded in the audit trail. Download links use random tokens and expire after 24 hours.
+Every artifact carries a loan ID, date, recorded document ID and **SPECIMEN · SYNTHETIC DEMO DATA · NOT A LEGAL DOCUMENT** watermark. Downloads use random tokens that expire after 24 hours. Interrupted document operations can be retried without repeating their simulated transactions.
 
 ## How it uses Nonilion
 
-The transport contract supports `on_message`, `send_reply`, `send_file`, `post_update`, `mention` and `office_action`. The working `LocalAdapter` displays chat, files, charts, officer mentions, progress and office-action events in the web console. Its Server-Sent Events feed shows each handoff, tool invocation and agent status. Batch jobs return immediately and publish results as work completes.
+The working `LocalAdapter` displays chat, files, charts, risk-team FYIs, risk-head mentions and office-action events in the console. SSE shows handoffs, tools and statuses. Background batches acknowledge immediately, post progress and return reusable exports.
 
-The intended office integration uses Nonilion's **Connect a bot** route. [`NonilionAdapter`](app/nonilion/adapter.py) deliberately raises `NotImplementedError("fill from the Nonilion Bot API guide")`. Before a live demo, the guide must supply the webhook schema, origin verification, reply/file/mention/office-action endpoints and pairing flow. Room knowledge search, presence and movement cannot run until those capabilities are documented and implemented.
+The intended integration uses **Connect a bot**. [`NonilionAdapter`](app/nonilion/adapter.py) explicitly raises `NotImplementedError("fill from the Nonilion Bot API guide")`. The guide must provide webhook payloads and verification, reply/file/mention/office-action endpoints and pairing. Actual office movement, knowledge search and presence remain pending.
 
-`POST /nonilion/webhook` rejects unverified requests by default. Setting `NONILION_DEV_ALLOW_UNVERIFIED=1` enables a development-only acknowledgment test: the endpoint returns HTTP 200 immediately and queues work, which then reports that the adapter is not implemented. This flag does **not** connect the office. Pairing and a reply inside Nonilion remain necessary before the entry meets the live-office requirement.
+`POST /nonilion/webhook` rejects unverified requests by default. `NONILION_DEV_ALLOW_UNVERIFIED=1` permits a local acknowledgment test: HTTP 200 is immediate, while background work reports the unimplemented adapter. This is not a live connection. Pairing and a reply inside Nonilion are still required for judging.
 
 ## Safety and compliance
 
-- Every approval or decline requires the `credit_officer` role. A high-risk override requires a typed reason and an audit entry; payout safeguards still apply.
-- Missing verification sources produce `unverified`, never `low`. The system explains observed flags and refuses predictions about whether a person will default.
-- A payout needs human approval, an accepted KFS and the borrower's own verified account. All payouts and collections are simulated.
-- The configurable cooling-off period is at least one day. The demo also has a waiting gate before payout. `DEMO_SKIP_COOLING_OFF=1` skips that waiting gate for a presentation; the recorded exit-without-penalty option remains available.
-- Reminder delivery is limited to 08:00 through before 19:00 IST. Out-of-hours requests are queued for 08:00. Threats, shaming, social-media lookups and contact with family, friends or employers are refused.
-- Grievances receive a reference and a 30-day resolution window, with an explanation of escalation to the RBI Ombudsman.
-- Uploads are capped at 5 MB and restricted to CSV, JSON, PDF, PNG, JPG, DOCX and XLSX. Documents are parsed as text or read-only cells. Images yield metadata only; no OCR or identity verification is invented. Archive expansion and file signatures are checked.
-- Chat and uploaded content are untrusted model input. Schemas, tool allowlists and deterministic authorization checks constrain actions. CSV/Excel exports neutralize formula-like text.
-- Secrets come from environment variables. `.env`, databases and generated artifacts are ignored by git. The app refuses to start without its Gemini key and model IDs. Rate limits allow 20 messages per IP per 10 minutes, with a separate daily model-call budget. API documentation is disabled unless `ENV=dev`.
+[`config/credit_policy.yaml`](config/credit_policy.yaml) is validated at boot; an invalid, missing or ambiguous file stops startup. [`app/policy.py`](app/policy.py) evaluates:
 
-The demo policy draws on the [RBI Digital Lending Directions](https://www.rbi.org.in/Scripts/BS_ViewMasDirections.aspx?id=12848), including borrower disclosures, direct disbursement, cooling-off and grievance handling. This prototype is not a regulatory certification or a production lending system. Its simplified waiting and simulated settlement flows must be reviewed before any real deployment.
+1. Auto-decline for a configured hard fraud flag or FOIR above 50%.
+2. Auto-approve when the band is `low`, amount is at most ₹2 lakh and FOIR is at most 50%.
+3. Escalate every other case, plus explicit override and restructure requests.
 
-## The three demo scripts
+Each decision records the policy version, exact fired rule, inputs and reasons. Model prose cannot alter that decision. Only `risk_head` may resolve an escalated credit application, and every approval or decline needs a specific typed reason. To change an automatic decision, the risk head first sends `override L-1043 because ...`; this opens an escalation and invalidates prior acceptance. A second reasoned decision is required. A servicing restructure request cannot be processed as a new-loan approval.
 
-Use a fresh seeded database and wait for each request to finish in the activity feed. Select the indicated role before sending each exact message. For the clean-loan presentation, set `DEMO_SKIP_COOLING_OFF=1` before starting the server.
+Payout gates require policy approval or a recorded risk-head approval on an escalated loan, accepted KFS, consent and the borrower's own verified account. Missing sources remain `unverified`. The configurable cooling-off period permits exit without penalty. `DEMO_SKIP_COOLING_OFF=1` skips the presentation's pre-payout wait; acceptance and exit rights remain. `exit L-1043` demonstrates withdrawal or a simulated cooling-off principal return.
 
-**1. The mismatched loan: L-1042**
+Reminders are delivered only from 08:00 to before 19:00 IST; out-of-hours requests are queued for 08:00. Threats, shaming, third-party contact, social-media lookups and predictions about personal default are refused. Grievances receive a reference, 30-day window and RBI Ombudsman escalation information. The policy follows the demo expectations informed by the [RBI Digital Lending Directions](https://www.rbi.org.in/Scripts/BS_ViewMasDirections.aspx?id=12848); this is not a regulatory certification.
 
-| Role | Message |
+Secrets stay in environment variables. The app requires a Gemini key and model IDs at startup. `.env`, databases and generated files are ignored. Limits are 20 requests/IP/10 minutes and a persistent daily model-call budget. Uploads are at most 5 MB; CSV, JSON, PDF, PNG, JPG, DOCX and XLSX are bounded and parsed without execution. Images provide metadata only. Chat/upload content is delimited as untrusted data; tool allowlists, structured outputs and server authorization constrain actions. Spreadsheet exports neutralize formula-like text. API docs are disabled unless `ENV=dev`.
+
+## The four demo scripts
+
+Use a fresh seeded database. Wait for the activity feed to finish after each command, and select the indicated demo role. Set `DEMO_SKIP_COOLING_OFF=1` for the instant-payout presentation.
+
+**1. L-1042: affordable, but a hard fraud flag**
+
+| Role | Exact message |
 |---|---|
 | Ops | `review L-1042` |
 | Ops | `add bank statement L-1042` |
-| Credit officer | `decline L-1042` |
 
-Intake requests the missing synthetic statement. The completed review flags `PAYOUT_NAME_MISMATCH` and `NEW_NUMBER`, prepares a decision note and risk chart, and mentions the officer. The officer's decline produces a letter explaining how to correct the payout account.
+FOIR is about 38%. The mismatched account and new number are flagged. The Underwriter automatically declines under **hard fraud flag**, sends a respectful rejection and posts an FYI with note/chart. No person decides this case.
 
-**2. A clean loan through closure: L-1043**
+**2. L-1043: ₹1 lakh through closure**
 
-| Role | Message |
+| Role | Exact message |
 |---|---|
 | Ops | `review L-1043` |
-| Credit officer | `approve L-1043` |
 | Borrower | `accept KFS L-1043` |
 | Ops | `disburse L-1043` |
-| Borrower | `pay L-1043` |
+| Borrower | `pay EMI L-1043` |
 | Ops | `fast-forward L-1043` |
 
-Open the sanction letter and KFS before acceptance. The remaining steps produce a simulated payout, repayment CSV/PDF, EMI receipt and No Dues Certificate. Fast-forward explicitly settles the remaining synthetic installments; it is not a real payment operation.
+The policy automatically approves the low-band loan. Read the sanction and KFS before acceptance. The remaining steps produce the simulated advice, schedule, receipt and No Dues Certificate. No real money moves.
 
-**3. Hardship without harassment: L-1044**
+**3. L-1045: ₹3 lakh exception, reduced to ₹2 lakh**
 
-| Role | Message |
+| Role | Exact message |
+|---|---|
+| Ops | `review L-1045` |
+| Risk head | `approve L-1045 at 200000 because Verified affordability and recorded mitigants support the reduced amount` |
+
+The medium-band application appears in the Escalated panel, with note, chart and risk-head mention. The risk head's amount and reason are audited. Approval produces the sanction and KFS; acceptance and payout gates still apply.
+
+**4. L-1044: hardship**
+
+| Role | Exact message |
 |---|---|
 | Borrower | `I lost my job and can't pay L-1044` |
 
-Collections acknowledges the difficulty, drafts a restructure request and mentions the officer. It promises no revised terms.
+Collections responds with empathy, creates a restructure note and escalates to the risk head. No changed terms are promised.
 
-For the background demonstration, use Ops and send `Review today's 20 applications`. Seed dates are refreshed for the demo when a new database is created; batch selection uses today's pending records. Progress appears every few applications, followed by CSV, Excel and a portfolio chart. Further checks: `Will this person default?`, `Message the borrower's employer L-1044`, and `approve L-1042` as Borrower. Only the officer can send `export audit log`.
+For background work, send `Review today's 20 applications` as Ops. The batch posts progress and returns CSV/Excel counts of auto-approved, auto-declined and escalated applications, plus a dashboard. Try `Will this person default?`, `Message the borrower's employer L-1044`, and `approve it anyway` as Borrower to demonstrate refusals. `export audit log` is risk-head-only.
 
 ## Quick start
 
-Use Python 3.12. The patch version is pinned in [`.python-version`](.python-version).
+Use Python 3.12; [`.python-version`](.python-version) pins the patch version.
 
 ```bash
 python3.12 -m venv .venv
@@ -142,64 +154,54 @@ python3.12 -m venv .venv
 cp .env.example .env
 ```
 
-Edit `.env` locally. Set `GEMINI_API_KEY`, an available Flash-tier ID for `GEMINI_MODEL_FAST`, and an available Pro-tier ID for `GEMINI_MODEL_DEEP`. Model IDs are read from the environment. Do not put credentials in terminal output or tracked files.
+Set the key and available model IDs in `.env`, then run:
 
 ```bash
 .venv/bin/python -m uvicorn app.main:app --env-file .env --reload
-```
-
-Open `http://127.0.0.1:8000`. The console has chat, a role selector, uploads, a live activity feed and a documents panel. `/healthz` reports service status and that Nonilion is not connected.
-
-The integration uses the official [`google-genai` SDK](https://ai.google.dev/gemini-api/docs/libraries), [structured outputs](https://ai.google.dev/gemini-api/docs/structured-output) and [function calling](https://ai.google.dev/gemini-api/docs/function-calling). Most model work uses the fast model; only the Credit decision-note call uses the deep model. A review normally uses about four model requests. Transient failures retry with exponential backoff, up to three attempts, and failures are reported visibly.
-
-Run the tests without a real model key:
-
-```bash
 .venv/bin/python -m pytest -q
-```
-
-Run the three scripted flows with real Gemini, or use the deterministic fake client offline:
-
-```bash
 .venv/bin/python scripts/demo_run.py
+# Offline rehearsal with fixed structured responses:
 .venv/bin/python scripts/demo_run.py --mock
 ```
 
-The script prints the event log and writes its isolated demo database and generated artifacts beneath `out/demo/`. It does not alter the running console's default database. The live mode needs `.env` credentials; `--mock` requires no network model call.
+Open `http://127.0.0.1:8000`. The script loads `.env` without replacing existing environment settings and writes an isolated database, event log and documents under `out/demo/`.
 
-**Deploy on Render.** Create a Blueprint from this repository using [`render.yaml`](render.yaml). It defines one Starter web service and a 1 GB persistent disk at `/var/data`. Enter the environment values below in the dashboard. Set `PUBLIC_BASE_URL` to the service's HTTPS URL. The disk keeps SQLite and generated files across restarts. No deployment has been performed as part of the local build. The configuration follows the official [FastAPI deployment guide](https://render.com/docs/deploy-fastapi), [Blueprint reference](https://render.com/docs/blueprint-spec) and [persistent disk guide](https://render.com/docs/disks).
+The official [`google-genai` SDK](https://ai.google.dev/gemini-api/docs/libraries) uses [structured outputs](https://ai.google.dev/gemini-api/docs/structured-output) and bounded [function calling](https://ai.google.dev/gemini-api/docs/function-calling). A normal review uses about four model calls. Only the Underwriter's explanatory note uses the deep model. Transient failures retry up to three times and are reported visibly.
 
-| Variable | Local default / requirement | Render value or guidance |
-|---|---|---|
-| `GEMINI_API_KEY` | Required; no default | Your private API key, entered in the dashboard |
-| `GEMINI_MODEL_FAST` | Required; no default | An available Flash-tier model ID |
-| `GEMINI_MODEL_DEEP` | Required; no default | An available Pro-tier model ID |
-| `DB_PATH` | `var/lendix.db` | `/var/data/lendix.db` |
-| `OUTPUT_DIR` | `out` | `/var/data/files` |
-| `ENV` | `production` | `production`; use `dev` locally only when API docs are needed |
-| `PUBLIC_BASE_URL` | Empty, for relative local links | Your service's HTTPS base URL, without a trailing slash |
-| `MAX_LLM_CALLS_PER_DAY` | `500` | `500`, or a positive budget you choose |
-| `COOLING_OFF_DAYS` | `1` | `1`, or a larger whole number |
-| `DEMO_SKIP_COOLING_OFF` | `0` | `1` only for the synthetic instant-payout presentation; otherwise `0` |
-| `NONILION_DEV_ALLOW_UNVERIFIED` | `0` | Keep `0`; `1` is only a local webhook test bypass |
-| `NONILION_PAIRING_CODE` | Optional, empty | Leave unset until the documented pairing integration exists |
-| `NONILION_BOT_TOKEN` | Optional, empty | Leave unset until the documented bot integration exists |
-| `PORT` | Set by the server invocation | Supplied by Render; used by the start command |
+**Deploy:** create a Render Blueprint from [`render.yaml`](render.yaml), which defines one web service and a 1 GB persistent disk. Set the following values in the dashboard. The exact start command is `uvicorn app.main:app --host 0.0.0.0 --port $PORT`; health check is `/healthz`. See the official [Blueprint reference](https://render.com/docs/blueprint-spec) and [disk guide](https://render.com/docs/disks).
 
-The start command is `uvicorn app.main:app --host 0.0.0.0 --port $PORT`, with `/healthz` as the health check. Use a single process for this SQLite-backed demo. Interrupted jobs are marked for retry after a restart rather than silently resumed.
+| Variable | Render value |
+|---|---|
+| `GEMINI_API_KEY` | Your private key |
+| `GEMINI_MODEL_FAST` | An available Flash-tier model ID |
+| `GEMINI_MODEL_DEEP` | An available Pro-tier model ID |
+| `DB_PATH` | `/var/data/lendix.db` |
+| `OUTPUT_DIR` | `/var/data/files` |
+| `CREDIT_POLICY_PATH` | `config/credit_policy.yaml` |
+| `ENV` | `production` |
+| `PUBLIC_BASE_URL` | The service's HTTPS URL, without a trailing slash |
+| `MAX_LLM_CALLS_PER_DAY` | `500` |
+| `COOLING_OFF_DAYS` | `1` |
+| `DEMO_SKIP_COOLING_OFF` | `1` for the synthetic presentation, otherwise `0` |
+| `NONILION_DEV_ALLOW_UNVERIFIED` | `0` |
+| `NONILION_PAIRING_CODE` | Leave unset until the documented integration is implemented |
+| `NONILION_BOT_TOKEN` | Leave unset until the documented integration is implemented |
+| `PORT` | Supplied by Render |
+
+Use one process with SQLite. Jobs interrupted by restart are marked for retry; completed transactions and policy audits remain recorded.
 
 ## Limits and what's next
 
-- **Live connection:** implement and verify the documented Nonilion pairing, authenticated webhook, replies, file delivery and office actions. The stub is not a completed competition entry.
-- **Live model validation:** run `scripts/demo_run.py` with your configured model IDs and inspect the outputs. Offline tests cover the contract, but no live Gemini run was verified without credentials.
-- **Demo boundaries:** payouts, bureau records, KYC fixtures, payments and closure settlements are synthetic. Images are not OCR-processed. Upload parsing does not prove identity or income.
-- **Production access:** add authenticated users, borrower ownership checks, private artifact authorization and protected operator interfaces before using real information. The public role selector intentionally permits switching demo roles.
-- **Operations:** add durable job execution, backup and retention policies, broader monitoring, and independent regulatory and security review. Current jobs run in-process; SQLite suits the single-service demonstration.
+- Implement the documented Nonilion pairing, verification, delivery and office actions before the live-office judging requirement is met.
+- Verify the real Gemini flow after setting credentials and model IDs; offline tests cannot validate access to a live model.
+- Payouts, bureau data, identity fixtures, repayments and settlements are simulated. Uploaded content does not prove identity or income. No OCR is performed.
+- Add authenticated identities, borrower ownership, private file authorization, durable workers, backups and retention before handling real information.
+- Restructure requests are prepared and escalated; revised servicing terms require a separate approval process.
 
 ## The team
 
-- **Product and lending workflow:** [Name]
-- **Agent orchestration and platform integration:** [Name]
+- **Product and credit policy:** [Name]
+- **Agent orchestration and integration:** [Name]
 - **Experience, documents and demo:** [Name]
 
 Released under the [MIT License](LICENSE).

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#152d33">
-    <meta name="description" content="Lendix Finance — a synthetic lending office where agents do the paperwork and a human makes the call.">
+    <meta name="description" content="Lendix Finance — a synthetic lending office run by AI agents, end to end.">
     <title>Lendix Finance · Lending office</title>
     <link rel="stylesheet" href="/static/styles.css">
     <script src="/static/app.js" defer></script>
@@ -40,20 +40,22 @@
         <div class="scenario-list">
           <button type="button" class="scenario-button selected" data-select-loan="L-1042"><span class="scenario-number">01</span><span>Mismatched details<small>L-1042 · Review & decision</small></span><span class="scenario-indicator" aria-hidden="true"></span></button>
           <button type="button" class="scenario-button" data-select-loan="L-1043"><span class="scenario-number">02</span><span>A clean application<small>L-1043 · The full lifecycle</small></span><span class="scenario-indicator" aria-hidden="true"></span></button>
-          <button type="button" class="scenario-button" data-select-loan="L-1044"><span class="scenario-number">03</span><span>A little breathing room<small>L-1044 · Borrower support</small></span><span class="scenario-indicator" aria-hidden="true"></span></button>
+          <button type="button" class="scenario-button" data-select-loan="L-1045"><span class="scenario-number">03</span><span>A policy exception<small>L-1045 · ₹3 lakh escalation</small></span><span class="scenario-indicator" aria-hidden="true"></span></button>
+          <button type="button" class="scenario-button" data-select-loan="L-1044"><span class="scenario-number">04</span><span>A little breathing room<small>L-1044 · Borrower support</small></span><span class="scenario-indicator" aria-hidden="true"></span></button>
         </div>
-        <div class="team-heading"><span class="sidebar-section-label">THE AGENT TEAM</span><span class="team-count">8</span></div>
+        <div class="team-heading"><span class="sidebar-section-label">THE AGENT TEAM</span><span class="team-count">9</span></div>
         <div class="agent-roster" id="agent-roster" aria-label="Agent team">
           <div class="roster-agent" data-agent="front desk"><span class="roster-dot"></span>Front Desk</div>
           <div class="roster-agent" data-agent="intake"><span class="roster-dot"></span>Intake</div>
           <div class="roster-agent" data-agent="risk"><span class="roster-dot"></span>Risk</div>
           <div class="roster-agent" data-agent="credit"><span class="roster-dot"></span>Credit</div>
+          <div class="roster-agent" data-agent="underwriter"><span class="roster-dot"></span>Underwriter</div>
           <div class="roster-agent" data-agent="compliance"><span class="roster-dot"></span>Compliance</div>
           <div class="roster-agent" data-agent="disbursement"><span class="roster-dot"></span>Disbursement</div>
           <div class="roster-agent" data-agent="collections"><span class="roster-dot"></span>Collections</div>
           <div class="roster-agent" data-agent="reporter"><span class="roster-dot"></span>Reporter</div>
         </div>
-        <div class="sidebar-note"><svg class="icon"><use href="#i-shield"></use></svg><p>Agents do the paperwork.<br><strong>A human makes the call.</strong></p></div>
+        <div class="sidebar-note"><svg class="icon"><use href="#i-shield"></use></svg><p>Agents apply the policy.<br><strong>People handle exceptions.</strong></p></div>
         <div class="sidebar-footer"><span class="small-brand-mark">L</span><span>Lendix Finance<small>Synthetic lending workspace</small></span></div>
       </aside>
 
@@ -63,15 +65,15 @@
           <div class="breadcrumb">Workspace <span>/</span> <strong>Live operations</strong></div>
           <div class="topbar-controls">
             <span class="connection-state connecting" id="connection-state" role="status"><span class="connection-dot"></span><span id="connection-label">Connecting</span></span>
-            <div class="role-control"><span class="user-avatar" id="role-avatar" aria-hidden="true">CO</span><div><label for="role-select">Demo role · no real authentication</label><select id="role-select" aria-label="Synthetic demo role"><option value="credit_officer">Credit officer</option><option value="ops">Operations</option><option value="borrower">Borrower</option></select></div></div>
+            <div class="role-control"><span class="user-avatar" id="role-avatar" aria-hidden="true">RH</span><div><label for="role-select">Demo role · no real authentication</label><select id="role-select" aria-label="Synthetic demo role"><option value="risk_head">Risk head</option><option value="ops">Operations</option><option value="borrower">Borrower</option></select></div></div>
           </div>
         </header>
         <div class="page-content">
-          <section class="page-heading" aria-labelledby="page-title"><div><div class="eyebrow">A SMALL OFFICE. A CAPABLE TEAM.</div><h1 id="page-title">The lending desk<span>.</span></h1><p>Move every application forward, with a human in the loop.</p></div><div class="date-chip"><svg class="icon"><use href="#i-clock"></use></svg><span id="today-label">Today</span></div></section>
+          <section class="page-heading" aria-labelledby="page-title"><div><div class="eyebrow">A SMALL OFFICE. A CAPABLE TEAM.</div><h1 id="page-title">The lending desk<span>.</span></h1><p>Written policy makes the decision. The risk head handles exceptions.</p></div><div class="date-chip"><svg class="icon"><use href="#i-clock"></use></svg><span id="today-label">Today</span></div></section>
           <div id="page-notice" class="page-notice" role="alert" hidden></div>
           <section class="metrics" aria-label="Workspace overview">
             <div class="metric-card"><div><span class="metric-label">Applications</span><strong id="metric-loans">—</strong></div><span class="metric-icon"><svg class="icon"><use href="#i-list"></use></svg></span><span class="metric-description">Synthetic portfolio</span></div>
-            <div class="metric-card"><div><span class="metric-label">Awaiting a decision</span><strong id="metric-pending">—</strong></div><span class="metric-icon amber"><svg class="icon"><use href="#i-clock"></use></svg></span><span class="metric-description">A human makes the call</span></div>
+            <div class="metric-card"><div><span class="metric-label">Escalated cases</span><strong id="metric-pending">—</strong></div><span class="metric-icon amber"><svg class="icon"><use href="#i-clock"></use></svg></span><span class="metric-description">Risk-head review required</span></div>
             <div class="metric-card"><div><span class="metric-label">Documents created</span><strong id="metric-documents">—</strong></div><span class="metric-icon blue"><svg class="icon"><use href="#i-file"></use></svg></span><span class="metric-description">Ready to review & download</span></div>
           </section>
 
@@ -88,9 +90,9 @@
                 <div class="messages" id="messages" role="log" aria-live="polite" aria-relevant="additions" aria-label="Conversation messages" tabindex="0">
                   <div class="welcome" id="welcome-card">
                     <span class="welcome-emblem" aria-hidden="true"><span class="brand-mark"><span></span><span></span><span></span></span></span>
-                    <div class="eyebrow">WELCOME TO LENDIX</div><h3>What’s on your desk today?</h3><p>Review an application, follow the agent handoffs, and get the documents you need to make a decision.</p>
+                    <div class="eyebrow">WELCOME TO LENDIX</div><h3>What’s on your desk today?</h3><p>Review an application, watch the policy decision, and follow exceptions to the risk head.</p>
                     <div class="welcome-options"><button type="button" data-command="review L-1042"><span class="welcome-option-icon">01</span><span>Review an application<small>Start with the mismatched loan</small></span><svg class="icon"><use href="#i-arrow"></use></svg></button><button type="button" data-command="Review today's 20 applications"><span class="welcome-option-icon">20</span><span>Work through today’s queue<small>Start a background batch review</small></span><svg class="icon"><use href="#i-arrow"></use></svg></button></div>
-                    <div class="welcome-footnote"><svg class="icon"><use href="#i-shield"></use></svg>Recommendations from agents. Decisions from you.</div>
+                    <div class="welcome-footnote"><svg class="icon"><use href="#i-shield"></use></svg>Decisions from written policy. Exceptions reviewed by the risk head.</div>
                   </div>
                 </div>
                 <div class="work-status" id="work-status" role="status" hidden><span class="working-spinner" aria-hidden="true"></span><span id="work-status-text">The team is working on your request…</span></div>
@@ -103,10 +105,15 @@
                   <div class="composer-caption"><span id="composer-context">Uploads go to L-1042. Include a loan ID in messages.</span><span>Enter to send <span aria-hidden="true">↵</span></span></div>
                 </div>
               </section>
-              <div class="workspace-footnote"><svg class="icon"><use href="#i-shield"></use></svg>Simulated payouts and bureau data. Every credit decision requires a credit officer.</div>
+              <div class="workspace-footnote"><svg class="icon"><use href="#i-shield"></use></svg>Simulated payouts and bureau data. Every decision records its policy rule and reasons.</div>
             </div>
 
             <aside class="inspector" aria-label="Agent activity and generated documents">
+              <section class="escalated-panel panel" aria-labelledby="escalated-title">
+                <header class="panel-header"><div><h2 id="escalated-title">Escalated</h2><span class="count-badge" id="escalated-count">0</span></div><span class="panel-subtitle">Risk head</span></header>
+                <p class="escalated-intro" id="escalated-help">Policy exceptions need a reasoned decision.</p>
+                <div id="escalated-list" class="escalated-list" aria-live="polite"></div>
+              </section>
               <section class="activity-panel panel" aria-labelledby="activity-title">
                 <header class="panel-header"><div><h2 id="activity-title">Agent activity</h2><span class="live-label" id="activity-live-label">LIVE</span></div><span class="count-badge" id="activity-count">0</span></header>
                 <div class="activity-intro">Every handoff. Every tool. In the open.</div>
@@ -115,7 +122,7 @@
               <section class="documents-panel panel" aria-labelledby="documents-title"><header class="panel-header"><div><h2 id="documents-title">Documents</h2><span class="count-badge" id="documents-count">0</span></div><select id="document-filter" aria-label="Filter documents"><option value="all">All loans</option><option value="selected">In focus</option></select></header><div class="documents-list" id="documents-list"><div class="documents-empty"><svg class="icon"><use href="#i-file"></use></svg><strong>Paperwork, handled.</strong><p>Reports, letters, and schedules<br>will appear here as they’re ready.</p></div></div><div class="documents-footer">Specimen documents · Links expire in 24 hours</div></section>
             </aside>
           </div>
-          <footer class="page-footer"><span>Lendix Finance <span aria-hidden="true">/</span> The human-led lending office</span><span>Built around trust.</span></footer>
+          <footer class="page-footer"><span>Lendix Finance <span aria-hidden="true">/</span> The policy-led lending office</span><span>Built around trust.</span></footer>
         </div>
       </main>
     </div>

@@ -14,5 +14,5 @@ var/
 *.db-shm
 *.db-wal
 .DS_Store
-/CODEX_PROMPT.md
+/*_PROMPT.md
 /.verification/

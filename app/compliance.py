@@ -44,7 +44,7 @@ def check_message(text: str, *, borrower_facing: bool = True, now=None, third_pa
         reasons.append("Fair practices prohibit contacting family, friends, employers or other third parties about a borrower's loan.")
     # Detect direct threats and promises. Explicit refusals may safely name the rule.
     unsafe_patterns = [
-        (r"\b(?:guaranteed approval|approval is guaranteed|guarantee(?:d)? (?:your |the )?loan approval|100% approval)\b", "Approval cannot be guaranteed; a human credit officer must decide."),
+        (r"\b(?:guaranteed approval|approval is guaranteed|guarantee(?:d)? (?:your |the )?loan approval|100% approval)\b", "Approval cannot be guaranteed; the written policy and recorded decisions govern lending."),
         (r"\b(?:you (?:will|could) (?:be arrested|go to jail)|we (?:will|'ll) (?:arrest|shame|humiliate)|pay (?:now |up )?or|shame on you|deadbeat|defaulter deserves|ruin your (?:life|reputation)|send (?:goons|thugs)|break your)\b", "Threats, abuse, intimidation and shaming are prohibited."),
         (r"\b(?:contact|call|message|tell|notify|visit) (?:the borrower's |your |their )?(?:employer|boss|family|friends|parents|relatives|neighbours|neighbors)\b", "Contact only the borrower; contacting third parties is prohibited."),
         (r"\b(?:hide|conceal|undisclosed|secret) (?:the |any |our )?(?:fees|charges)\b", "Every fee must be disclosed in the Key Facts Statement."),
@@ -77,16 +77,31 @@ def check_message(text: str, *, borrower_facing: bool = True, now=None, third_pa
 def check_disbursement(loan: dict, *, now=None, demo_skip_cooling: bool = False) -> dict:
     reasons = []
     current = _now(now)
-    approval = loan.get("human_approval") or {}
-    approved = loan.get("human_approved") is True or approval.get("approved") is True
-    role = loan.get("approved_by_role") or approval.get("role")
-    approved_at = _datetime(loan.get("approved_at") or approval.get("at"))
-    if not approved or role != "credit_officer" or approved_at is None or approved_at > current:
-        reasons.append("A recorded, dated human credit officer approval is required before disbursement.")
+    underwriting = loan.get("underwriting") if isinstance(loan.get("underwriting"), dict) else {}
+    policy_reasons = underwriting.get("reasons")
+    policy_inputs = underwriting.get("inputs")
+    policy_approved = (loan.get("approval_source") == "policy"
+                       and underwriting.get("decision") in {"approve", "approve_lower"}
+                       and type(underwriting.get("policy_version")) is int and underwriting["policy_version"] > 0
+                       and isinstance(underwriting.get("rule"), str) and bool(underwriting["rule"].strip())
+                       and isinstance(policy_inputs, dict) and bool(policy_inputs)
+                       and isinstance(policy_reasons, list) and bool(policy_reasons)
+                       and all(isinstance(reason, str) and reason.strip() for reason in policy_reasons))
+    if policy_approved:
+        try:
+            policy_amount = Decimal(str(underwriting.get("approved_amount")))
+            approved_amount = Decimal(str(loan.get("approved_amount")))
+            policy_approved = policy_amount.is_finite() and policy_amount > 0 and policy_amount == approved_amount
+        except (InvalidOperation, ValueError, TypeError):
+            policy_approved = False
+    risk_head_approved = (loan.get("approval_source") == "risk_head" and loan.get("approved_by_role") == "risk_head"
+                         and loan.get("human_approved") is True and loan.get("escalated_for_decision") is True
+                         and isinstance(loan.get("override_reason"), str) and bool(loan["override_reason"].strip()))
+    approved_at = _datetime(loan.get("approved_at"))
+    if not (policy_approved or risk_head_approved) or approved_at is None or approved_at > current:
+        reasons.append("A dated approval from the written policy, or a reasoned risk-head decision on an escalated case, is required before disbursement.")
     risk = loan.get("risk") or {}
     band = loan.get("risk_band") or (risk.get("band") if isinstance(risk, dict) else risk)
-    if band == "high" and not str(loan.get("override_reason") or approval.get("reason") or "").strip():
-        reasons.append("A high-risk override requires the credit officer's typed reason in the audit trail.")
     if band == "unverified":
         reasons.append("Required verification sources must be complete before disbursement.")
     if loan.get("account_verified") is not True or not loan.get("payout_account") or not names_match(loan.get("name", ""), loan.get("payout_name", "")):

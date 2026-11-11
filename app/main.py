@@ -18,13 +18,14 @@ from .gemini import GeminiClient
 from .model import ModelUnavailable
 from .nonilion.adapter import LocalAdapter, NonilionAdapter, verify_nonilion_request
 from .orchestrator import Orchestrator
+from .policy import load_policy
 from .store import Store, utcnow
 from .uploads import MAX_UPLOAD_BYTES, parse_upload
 
 
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=8000)
-    role: Literal["credit_officer", "ops", "borrower"] = "borrower"
+    role: Literal["risk_head", "ops", "borrower"] = "borrower"
     conversation_id: str = Field(default="office", min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_-]+$")
 
 
@@ -35,14 +36,16 @@ def create_app(settings=None, model=None):
     @asynccontextmanager
     async def lifespan(app):
         settings.validate()
+        policy = load_policy(settings.policy_path)
         store = Store(settings.db_path)
         store.seed(ROOT / "data/seed.json")
         client = model or GeminiClient(settings, store)
         local = LocalAdapter(store)
-        orchestrator = Orchestrator(store, settings, client, local)
+        orchestrator = Orchestrator(store, settings, client, local, policy=policy)
         local.orchestrator = orchestrator
         app.state.store, app.state.orchestrator, app.state.adapter = store, orchestrator, local
         app.state.nonilion = NonilionAdapter()
+        app.state.policy = policy
         for job in store.all("job"):
             if job["status"] in {"queued", "running"}:
                 job["status"] = "interrupted"
@@ -123,7 +126,7 @@ def create_app(settings=None, model=None):
                 raise
             except Exception:
                 job["status"] = "failed"
-                store.emit("error", "Front Desk", "This request could not be completed. Please retry or ask the officer to inspect the recorded state. No approval was inferred.", conversation_id=conversation)
+                store.emit("error", "Front Desk", "This request could not be completed. Please retry or ask the risk head to inspect the recorded state. No approval was inferred.", conversation_id=conversation)
             finally:
                 store.put("job", job_id, job)
                 store.emit("status", "Front Desk", f"Job {job['status']}.", conversation_id=conversation,
@@ -165,7 +168,7 @@ def create_app(settings=None, model=None):
 
     @app.post("/api/upload", status_code=202)
     async def upload(request: Request, file: UploadFile = File(...), loan_id: str = Form(""),
-                     role: Literal["credit_officer", "ops", "borrower"] = Form("borrower"),
+                     role: Literal["risk_head", "ops", "borrower"] = Form("borrower"),
                      conversation_id: str = Form("office")):
         rate(request)
         if len(conversation_id) > 80 or not conversation_id.replace("-", "").replace("_", "").isalnum():
@@ -215,7 +218,7 @@ def create_app(settings=None, model=None):
                 elif parsed.get("text", "").strip():
                     await office.application(parsed["text"][:30000], role, current_loan)
                 else:
-                    await office.reply("The image or scan was received, but this demo does not perform image identity verification. Please provide readable text or a structured CSV/JSON application for officer review.", loan)
+                    await office.reply("The image or scan was received, but this demo does not perform image identity verification. Please provide readable text or a structured CSV/JSON application for risk-head review.", loan)
                 office.event("status", "Intake", "Attachment parsed as untrusted data; verification was not inferred.", loan)
 
         return submit(process, conversation_id, "upload")

@@ -1,7 +1,7 @@
 [project]
 name = "lendix"
 version = "0.1.0"
-description = "A lending office where AI agents do the paperwork and a human makes the call"
+description = "A lending office run by AI agents, end to end"
 requires-python = ">=3.12,<3.13"
 
 [tool.pytest.ini_options]

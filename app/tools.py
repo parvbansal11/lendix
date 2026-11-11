@@ -146,7 +146,7 @@ def _amortize(principal: Decimal, annual_rate: Decimal, months: int) -> list[dic
 
 
 def compute_affordability(loan: dict) -> dict:
-    """Recommend only; every decision remains with a human credit officer."""
+    """Calculate affordability; the written policy owns every credit decision."""
     with localcontext() as context:
         context.prec = 36
         income = _decimal(loan.get("monthly_income"))
@@ -164,23 +164,18 @@ def compute_affordability(loan: dict) -> dict:
         unit_emi = _emi(Decimal(1), annual / 12, months)
         eligible = (max_emi / unit_emi).quantize(CENT, rounding=ROUND_DOWN)
         recommended = min(requested, eligible)
-        risk = loan.get("risk", {})
-        band = loan.get("risk_band") or (risk.get("band") if isinstance(risk, dict) else risk)
         reasons = []
-        recommendation = "approve" if requested <= eligible else "approve_lower"
+        recommendation = "affordable" if requested <= eligible else "lower_amount_affordable"
         if requested > eligible:
             reasons.append("The requested EMI would exceed the 50% fixed-obligation-to-income cap using verified income.")
-        if band in {"high", "unverified"}:
-            recommendation = "decline"
-            reasons.append("Identity or fraud checks require resolution before lending." if band == "high" else "Complete the missing verification sources before lending.")
         if verified_income <= 0 or recommended <= fees or "bank_statement" not in loan.get("documents", []):
-            recommendation = "decline"
+            recommendation = "insufficient_capacity"
             reasons.append("Verified income and sufficient repayment capacity are required.")
-        if recommendation == "decline":
+        if recommendation == "insufficient_capacity":
             recommended = ZERO
         if not reasons:
-            reasons.append("The requested amount fits the 50% fixed-obligation-to-income cap; a human officer must decide.")
-        # Disclose requested-loan economics even when the recommendation is a decline.
+            reasons.append("The requested amount fits the 50% fixed-obligation-to-income cap using verified income.")
+        # Economics describe the requested terms independently of policy decisions.
         schedule = _amortize(requested, annual, months)
         payment = _decimal(schedule[0]["emi"])
         interest = sum((_decimal(row["interest"]) for row in schedule), ZERO)

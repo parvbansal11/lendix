@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the three synthetic demo stories in an isolated database."""
+"""Run the four synthetic demo stories in an isolated database."""
 import argparse
 import asyncio
 import json
@@ -30,13 +30,13 @@ async def run(mock=False):
     steps = [
         ("ops", "review L-1042"),
         ("ops", "add bank statement L-1042"),
-        ("credit_officer", "decline L-1042"),
         ("ops", "review L-1043"),
-        ("credit_officer", "approve L-1043"),
         ("borrower", "accept KFS L-1043"),
         ("ops", "disburse L-1043"),
         ("borrower", "pay EMI L-1043"),
         ("ops", "close L-1043"),
+        ("ops", "review L-1045"),
+        ("risk_head", "approve L-1045 at 200000 because The reduced amount fits verified repayment capacity and the mobile activation exception has been reviewed."),
         ("borrower", "I lost my job and can't pay L-1044"),
     ]
     print("Lendix Finance · synthetic demo · " + ("mock model" if mock else "live model"))
@@ -45,7 +45,7 @@ async def run(mock=False):
         for role, message in steps:
             print(f"\n[{role}] {message}")
             print(await office.run(message, role, "script-demo"))
-        expected = {"L-1042": "declined", "L-1043": "closed", "L-1044": "restructure_requested"}
+        expected = {"L-1042": "declined", "L-1043": "closed", "L-1045": "approved", "L-1044": "restructure_requested"}
         failures = [loan for loan, status in expected.items() if store.get("loan", loan)["status"] != status]
         events = store.all_events()
         (output / "events.json").write_text(json.dumps(events, indent=2, ensure_ascii=False))
@@ -56,7 +56,7 @@ async def run(mock=False):
         print(f"\nDocuments and event log: {output}")
         if failures:
             raise RuntimeError("Demo incomplete for " + ", ".join(failures) + "; inspect the event log and retry with a fresh run.")
-        print("All three stories completed.")
+        print("All four stories completed.")
     finally:
         if not mock:
             await model.close()

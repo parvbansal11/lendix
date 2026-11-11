@@ -76,8 +76,8 @@ def test_public_console_and_state_identify_the_synthetic_workspace(office):
     assert state["demo_role_switching"] is True
     assert state["nonilion_connected"] is False
     assert len(state["loans"]) >= 25
-    assert {"L-1042", "L-1043", "L-1044"} <= {loan["id"] for loan in state["loans"]}
-    assert {user["role"] for user in state["users"]} == {"credit_officer", "ops", "borrower"}
+    assert {"L-1042", "L-1043", "L-1044", "L-1045"} <= {loan["id"] for loan in state["loans"]}
+    assert {user["role"] for user in state["users"]} == {"risk_head", "ops", "borrower"}
     assert client.get("/healthz").json()["status"] == "ok"
 
 
@@ -120,6 +120,23 @@ def test_missing_model_identifiers_stop_boot(settings, field):
     with pytest.raises(RuntimeError, match="GEMINI_MODEL_FAST and GEMINI_MODEL_DEEP"):
         with TestClient(create_app(settings, FakeClient())):
             pytest.fail("An app with missing model configuration must not boot.")
+
+
+@pytest.mark.parametrize("contents", ["version: -1\n", "[not: valid: yaml", "version: 1\nauto_approve: {max_amount: -1}\n"])
+def test_invalid_credit_policy_stops_boot(settings, tmp_path, contents):
+    policy_path = tmp_path / "invalid-policy.yaml"
+    policy_path.write_text(contents)
+    settings.policy_path = str(policy_path)
+    with pytest.raises((ValueError, RuntimeError)):
+        with TestClient(create_app(settings, FakeClient())):
+            pytest.fail("An invalid written credit policy must prevent startup.")
+
+
+def test_missing_credit_policy_stops_boot(settings, tmp_path):
+    settings.policy_path = str(tmp_path / "missing-policy.yaml")
+    with pytest.raises((ValueError, RuntimeError, FileNotFoundError)):
+        with TestClient(create_app(settings, FakeClient())):
+            pytest.fail("A missing written credit policy must prevent startup.")
 
 
 @pytest.mark.parametrize("value", [None, "", "0", "true", "yes"])
@@ -198,7 +215,7 @@ async def test_chat_acknowledges_before_agent_work_finishes(settings):
     ("send_reply", ("conversation", "hello")),
     ("send_file", ("conversation", "/files/specimen", "specimen.pdf")),
     ("post_update", ("working",)),
-    ("mention", ("officer", "review requested")),
+    ("mention", ("risk_head", "review requested")),
     ("office_action", ("walk",)),
 ])
 @pytest.mark.asyncio
@@ -209,7 +226,7 @@ async def test_unconfigured_external_adapter_fails_explicitly(method, args):
 
 @pytest.mark.parametrize("role", ["ops", "borrower"])
 @pytest.mark.parametrize("command", ["approve L-1043", "decline L-1043"])
-def test_api_preserves_officer_only_decision_boundary(office, role, command):
+def test_api_preserves_risk_head_only_decision_boundary(office, role, command):
     client, app, model = office
     before = app.state.store.get("loan", "L-1043")
     response = client.post("/api/chat", json={"message": command, "role": role, "conversation_id": "role-check"})
@@ -217,12 +234,13 @@ def test_api_preserves_officer_only_decision_boundary(office, role, command):
     assert completed_job(client, response.json()["job_id"])["status"] == "completed"
     assert app.state.store.get("loan", "L-1043") == before
     replies = [event["text"] for event in app.state.store.all_events() if event["kind"] == "reply"]
-    assert any("Only the credit officer" in reply for reply in replies)
+    assert any("Only the risk head" in reply for reply in replies)
     assert model.calls == []
 
 
 @pytest.mark.parametrize("payload", [
     {"message": "hello", "role": "admin"},
+    {"message": "hello", "role": "credit_officer"},
     {"message": ""},
     {"message": "  "},
     {"message": "x" * 8001},
@@ -232,6 +250,26 @@ def test_invalid_chat_inputs_are_rejected_before_job_creation(office, payload):
     client, app, _ = office
     assert client.post("/api/chat", json=payload).status_code == 422
     assert app.state.store.all("job") == []
+
+
+def test_risk_head_role_accepts_only_escalated_cases_and_typed_decisions(office):
+    client, app, _ = office
+    before = app.state.store.get("loan", "L-1045")
+    response = client.post("/api/chat", json={"message": "approve L-1045 because Verified affordability and recorded mitigants", "role": "risk_head"})
+    assert response.status_code == 202
+    assert completed_job(client, response.json()["job_id"])["status"] == "completed"
+    assert app.state.store.get("loan", "L-1045") == before
+    review = client.post("/api/chat", json={"message": "review L-1045", "role": "ops"})
+    assert completed_job(client, review.json()["job_id"])["status"] == "completed"
+    assert app.state.store.get("loan", "L-1045")["status"] == "escalated"
+    missing_reason = client.post("/api/chat", json={"message": "approve L-1045 at 200000", "role": "risk_head"})
+    assert completed_job(client, missing_reason.json()["job_id"])["status"] == "completed"
+    assert app.state.store.get("loan", "L-1045")["status"] == "escalated"
+    approval = client.post("/api/chat", json={"message": "approve L-1045 at 200000 because Verified affordability and recorded mitigants", "role": "risk_head"})
+    assert completed_job(client, approval.json()["job_id"])["status"] == "completed"
+    approved = app.state.store.get("loan", "L-1045")
+    assert approved["status"] == "approved" and approved["approved_amount"] == 200000
+    assert approved["approval_source"] == "risk_head"
 
 
 def test_message_limit_is_twenty_per_ip_not_per_claimed_forwarding_header(office):

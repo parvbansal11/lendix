@@ -1,0 +1,13 @@
+version: 1
+auto_decline:
+  reason_codes: [PAYOUT_NAME_MISMATCH, DOB_PAN_MISMATCH, SHARED_PAYOUT_ACCOUNT]
+  foir_above: 0.50
+auto_approve:
+  bands: [low]
+  max_amount: 200000
+  foir_at_most: 0.50
+escalate:
+  bands: [medium, unverified]
+  amount_above: 200000
+  on_override_request: true
+  on_restructure_request: true

@@ -1,5 +1,5 @@
 """LLM protocol and fixed structured responses for isolated tests."""
-from .agents import RouteOutput, IntakeOutput, RiskOutput, CreditOutput, ReporterOutput, CollectionsOutput
+from .agents import RouteOutput, IntakeOutput, RiskOutput, UnderwriterOutput, ReporterOutput, CollectionsOutput
 
 
 class ModelUnavailable(RuntimeError):
@@ -21,10 +21,10 @@ class FakeClient:
         fixed = {
             RouteOutput: {"intent": "help", "reply": "I can help with applications, risk review, repayments and complaints. Which loan should we work on?"},
             IntakeOutput: {},
-            RiskOutput: {"summary": "The attached report lists the deterministic identity and income checks. An officer must review the findings."},
-            CreditOutput: {"summary": "The recommendation is based on the recorded risk checks and affordability calculation. A credit officer makes the final decision.", "reasons": ["Review the documented risk findings and affordability limits."]},
-            ReporterOutput: {"summary": "Review complete. The officer can inspect the reports and make a decision."},
-            CollectionsOutput: {"summary": "I am sorry to hear about your situation. We can send a restructure request to the credit officer for review."},
+            RiskOutput: {"summary": "The attached report lists the deterministic identity and income checks. The Underwriter applies the written policy to these findings."},
+            UnderwriterOutput: {"summary": "The decision follows the recorded policy rule and its deterministic inputs. Refer to the rule, version and reasons in this note.", "reasons": ["The written policy rule and recorded inputs determine this outcome."]},
+            ReporterOutput: {"summary": "Review complete. The risk team can inspect the decision and handle any escalated exception."},
+            CollectionsOutput: {"summary": "I am sorry to hear about your situation. We can send a restructure request to the risk head for review."},
         }
         return schema.model_validate(fixed[schema])
 

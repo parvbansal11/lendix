@@ -1,5 +1,6 @@
 """Auditable lending state machine. Model output never grants authority."""
 import asyncio
+import copy
 import re
 import secrets
 from datetime import datetime, timedelta
@@ -10,18 +11,20 @@ from .compliance import check_disbursement, check_document, check_message, griev
 from .config import ROOT
 from .documents import DocumentService
 from .model import ModelUnavailable
+from .policy import apply_policy, load_policy
 from .risk_rules import run_risk_checks
 from .store import utcnow
 from .tools import bureau_lookup, compute_affordability, emi_schedule, validate_application
 
 IST = ZoneInfo("Asia/Kolkata")
 WATERMARK = "SPECIMEN · SYNTHETIC DEMO DATA · NOT A LEGAL DOCUMENT"
-HELP = "Lendix handles loan applications, document checks, risk reviews, officer decisions, repayments and complaints. Try ‘review L-1042’, ‘list loans’, or tell me which lending task you need."
+HELP = "Lendix handles loan applications, document checks, policy decisions, risk-head escalations, repayments and complaints. Try ‘review L-1042’, ‘list loans’, or tell me which lending task you need."
 
 
 class Orchestrator:
-    def __init__(self, store, settings, model, adapter=None):
+    def __init__(self, store, settings, model, adapter=None, policy=None):
         self.store, self.settings, self.model, self.adapter = store, settings, model, adapter
+        self.policy = policy if policy is not None else load_policy(settings.policy_path)
         self.documents = DocumentService(settings.output_dir)
         self.lock = asyncio.Lock()
         self.conversation = "office"
@@ -58,9 +61,9 @@ class Orchestrator:
     async def mention(self, text, loan):
         self.tool("Reporter", "mention", lambda: None, loan)
         if self.adapter:
-            await self.adapter.mention("officer", text)
+            await self.adapter.mention("risk_head", text)
         else:
-            self.event("mention", "Reporter", f"@officer {text}", loan)
+            self.event("mention", "Reporter", f"@risk_head {text}", loan)
 
     async def progress(self, text):
         self.tool("Reporter", "post_update", lambda: None)
@@ -129,7 +132,7 @@ class Orchestrator:
                 return await self.reply(str(exc))
 
     async def _handle(self, message, role, now):
-        if role not in {"credit_officer", "ops", "borrower"}:
+        if role not in {"risk_head", "ops", "borrower"}:
             return await self.reply("Please choose a valid demo role.")
         text = message.casefold()
         match = re.search(r"\bL-\d+\b", message, re.I)
@@ -146,22 +149,24 @@ class Orchestrator:
             return await self.reply("I can explain recorded risk reasons and affordability; I cannot predict whether a person will default. Which loan would you like to review?", loan)
         if any(word in text for word in ("threaten", "shame", "abuse", "harass")):
             return await self.reply("I cannot threaten, shame or harass a borrower. I can prepare a polite reminder or a hardship request.", loan)
-        if re.match(r"^(approve|decline)\b", text):
-            if role != "credit_officer":
-                return await self.reply("Only the credit officer can approve or decline a loan. I can prepare the case for their review.", loan)
+        if re.match(r"^(approve|decline|override)\b", text):
+            if role != "risk_head":
+                return await self.reply("Only the risk head can decide escalated loans or request an override, with a typed reason. I can prepare the case for review.", loan)
             if not loan:
-                return await self.reply("Which loan should the officer decide? Include an ID such as L-1042.")
+                return await self.reply("Which escalated loan should the risk head decide? Include an ID such as L-1045.")
+            if text.startswith("override"):
+                return await self.request_override(loan, message, role)
             return await self.decide(loan, message, role)
         if "audit" in text:
-            if role != "credit_officer":
-                return await self.reply("Only the credit officer can export the audit log.")
+            if role != "risk_head":
+                return await self.reply("Only the risk head can export the audit log.")
             await self.document("audit_log", {"id": "PORTFOLIO"}, {"events": self.store.all_events()}, "json")
             return await self.reply("The audit log is ready. It records decisions, reasons, handoffs and document IDs.")
         if any(word in text for word in ("complaint", "grievance", "complain")):
             return await self.grievance(loan, message, role)
         if "review" in text and any(word in text for word in ("today", "applications", "batch")):
             if role == "borrower":
-                return await self.reply("Portfolio review is for the ops team and credit officer. I can help with a single application.")
+                return await self.reply("Portfolio review is for the ops team and risk head. I can help with a single application.")
             await self.reply("I have started reviewing up to 20 of today’s pending applications. I will post progress and return a review queue and portfolio chart.")
             candidates = [x for x in self.store.all("loan") if x.get("status", "new") in {"new", "received", "pending", "awaiting_documents"} and x.get("applied_at", "")[:10] == now.date().isoformat()]
             batch_fixtures = [x for x in candidates if x.get("today_batch")]
@@ -173,11 +178,13 @@ class Orchestrator:
                     self.event("error", "Reporter", f"{item['id']}: review paused; needs attention.", item)
                     await self.reply(str(exc), item)
                 if index % 4 == 0 or index == len(rows):
-                    await self.progress(f"Reviewed {index}/{len(rows)} applications; human decisions remain pending.")
+                    await self.progress(f"Reviewed {index}/{len(rows)} applications; policy decisions and exceptions are being recorded.")
                 await asyncio.sleep(0)
             await self.export_queue()
             await self.dashboard()
-            return await self.reply(f"Batch finished: {len(rows)} applications processed. Download the review queue and dashboard. No loans were automatically approved.")
+            processed = [self.store.get("loan", item["id"]) for item in rows]
+            counts = self.decision_counts(processed)
+            return await self.reply(f"Batch finished: {len(rows)} applications processed. {counts['auto_approved']} auto-approved, {counts['auto_declined']} auto-declined, {counts['escalated']} escalated. Download the review queue and dashboard.")
         if "dashboard" in text or "portfolio" in text:
             await self.dashboard()
             return await self.reply("The portfolio dashboard is ready.")
@@ -189,7 +196,7 @@ class Orchestrator:
             return await self.reply("\n".join(f"{x['id']} · {x['name']} · {x.get('status', 'new')}" for x in loans))
         if any(word in text for word in ("can't pay", "cannot pay", "lost my job", "hardship", "restructure")):
             if not loan:
-                return await self.reply("I’m sorry things are difficult. Which loan should I include in a request for the officer?")
+                return await self.reply("I’m sorry things are difficult. Which loan should I include in a request for the risk head?")
             return await self.hardship(loan, message)
         if "reminder" in text:
             if not loan:
@@ -200,8 +207,8 @@ class Orchestrator:
         if loan and (text.startswith("review") or text.startswith("check")):
             return await self.review(loan)
         if loan and ("add bank statement" in text or "document arrived" in text):
-            if loan.get("status") not in {"new", "pending", "received", "awaiting_documents", "awaiting_decision"}:
-                return await self.reply("Documents cannot be changed after a decision. Ask the officer to open a new application.", loan)
+            if loan.get("status") not in {"new", "pending", "received", "awaiting_documents"}:
+                return await self.reply("Documents cannot be changed after a decision. Ask the risk head to open a new application.", loan)
             loan["documents"] = sorted(set(loan.get("documents", [])) | {"bank_statement"})
             self.event("tool", "Intake", "request_document: synthetic bank statement received", loan)
             self.save(loan)
@@ -210,7 +217,7 @@ class Orchestrator:
             if role != "borrower":
                 return await self.reply("KFS acceptance must be given by the borrower. Switch to the synthetic borrower role for this demonstration.", loan)
             if loan.get("status") != "approved" or not loan.get("kfs_issued"):
-                return await self.reply("The officer must approve the loan and issue the KFS before you can accept it.", loan)
+                return await self.reply("The loan needs policy or risk-head approval and an issued KFS before you can accept it.", loan)
             if loan.get("kfs_accepted"):
                 await self.issue_agreement(loan)
                 return await self.reply("Your KFS acceptance is already recorded.", loan)
@@ -222,7 +229,7 @@ class Orchestrator:
             return await self.reply("Your KFS acceptance is recorded. You can exit without penalty during the cooling-off period. Ops can request the simulated payout after the demo waiting gate.", loan)
         if loan and "disburse" in text:
             if role == "borrower":
-                return await self.reply("Only ops or the credit officer can initiate the simulated payout.", loan)
+                return await self.reply("Only ops or the risk head can initiate the simulated payout.", loan)
             return await self.disburse(loan, now)
         if loan and re.match(r"^(exit|cancel)\b", text):
             return await self.exit_loan(loan, now)
@@ -230,7 +237,7 @@ class Orchestrator:
             return await self.payment(loan)
         if loan and (text.startswith("close") or "fast-forward" in text):
             if role == "borrower":
-                return await self.reply("Only ops or the credit officer can fast-forward simulated payments to closure.", loan)
+                return await self.reply("Only ops or the risk head can fast-forward simulated payments to closure.", loan)
             return await self.close(loan)
         if loan and "schedule" in text:
             if loan.get("status") not in {"disbursed", "closed", "restructure_requested"}:
@@ -252,7 +259,11 @@ class Orchestrator:
         return await self.reply(HELP + "\nWhich loan or task should we work on?")
 
     async def review(self, loan):
-        if loan.get("status") in {"approved", "declined", "disbursed", "closed", "restructure_requested"}:
+        if loan.get("status") in {"approved", "declined", "escalated"} and loan.get("decision_operation_id"):
+            if not loan.get("decision_reported"):
+                return await self.complete_decision(loan)
+            return await self.reply(f"{loan['id']} is already {loan['status']}. Its recorded decision and reports are available in the documents panel.", loan)
+        if loan.get("status") in {"approved", "declined", "disbursed", "closed", "restructure_requested", "withdrawn"}:
             return await self.reply(f"{loan['id']} is already {loan['status']}. Its recorded decision and reports are available in the documents panel.", loan)
         self.handoff("Front Desk", "Intake", loan, "application review requested")
         if not loan.get("acknowledged"):
@@ -285,86 +296,180 @@ class Orchestrator:
         credit = await self.model_tool("Credit", "compute_affordability", {"loan_id": loan["id"]},
                                        lambda: compute_affordability(loan), loan)
         bureau = self.tool("Credit", "bureau_lookup", lambda: bureau_lookup(loan), loan)
-        if risk["band"] in {"high", "unverified"}:
-            credit["recommendation"] = "decline" if risk["band"] == "high" else "manual_review"
-            credit["reasons"] = list(risk["explanations"]) + credit.get("reasons", [])
-        note = await self.model.structured(AGENTS["Credit"], {"risk": risk, "credit": credit, "bureau": bureau}, deep=True)
-        credit["summary"] = self.checked_summary(note.summary)
-        loan.update(credit=credit, status="awaiting_decision")
-        self.save(loan)
+        loan.update(credit=credit, bureau=bureau)
+        self.handoff("Credit", "Underwriter", loan, "affordability computed; apply the written credit policy")
+        evaluation = self.tool("Underwriter", "apply_policy", lambda: apply_policy(loan, self.policy), loan)
+        loan["policy_evaluation"] = copy.deepcopy(evaluation)
+        self.record_underwriting(loan, evaluation, "policy")
         pending = self.store.get("conversation", self.conversation)
         if pending and pending.get("loan_id") == loan["id"]:
             self.store.delete("conversation", self.conversation)
-        self.tool("Credit", "draft_decision_note", lambda: credit["summary"], loan)
-        await self.document("credit_appraisal", loan, {"summary": credit["summary"], "reasons": credit["reasons"]})
-        self.handoff("Credit", "Compliance", loan, "recommendation ready; human decision required")
-        self.handoff("Compliance", "Reporter", loan, "reports checked")
-        await self.mention(f"{loan['id']} needs your decision. Risk: {risk['band']}; recommendation: {credit['recommendation']}. Risk report, chart and decision note are attached.", loan)
-        if self.adapter:
-            await self.adapter.office_action("request_officer_review", loan_id=loan["id"])
-        else:
-            self.event("office_action", "Reporter", "Local demonstration: request officer review", loan)
-        reasons = "; ".join(risk["explanations"]) or "No rule flags; available sources checked."
-        return await self.reply(f"{loan['id']} · Risk {risk['band']} · Recommend {credit['recommendation']}. {reasons} The credit officer makes the decision.", loan, "Reporter")
+        return await self.complete_decision(loan)
 
     def checked_summary(self, text):
         result = self.tool("Compliance", "check_message", lambda: check_message(text))
         return text if result["allowed"] else "Please review the deterministic findings in this document."
 
-    async def decide(self, loan, message, role):
-        if loan.get("status") == "declined" and message.casefold().startswith("decline"):
-            if loan.get("rejection_reasons"):
-                await self.issue_rejection(loan)
-                return await self.reply("The existing decline decision is unchanged. Your rejection letter is ready with the recorded reasons.", loan)
-            return await self.reply("This loan was already declined. Ask the officer to inspect its recorded reasons.", loan)
-        if loan.get("status") == "approved" and message.casefold().startswith("approve") and not loan.get("kfs_issued"):
-            await self.issue_approval_documents(loan)
-            return await self.reply("The existing officer approval is unchanged. The sanction letter and KFS are now ready for borrower acceptance.", loan)
-        if loan.get("status") != "awaiting_decision":
-            return await self.reply("This loan is not awaiting a decision. Complete its document and risk review first, or inspect its existing decision.", loan)
-        if message.casefold().startswith("decline"):
-            reasons = loan["credit"].get("reasons") or ["The application does not meet the current lending criteria."]
-            if "PAYOUT_NAME_MISMATCH" in loan["risk"]["codes"]:
-                reasons = ["The payout account is not in your name. Please use a verified bank account in your own name when applying again.", *reasons]
-            loan.update(status="declined", decision="decline", decision_by=role, decision_at=utcnow().isoformat(),
-                        decision_operation_id="DEC-" + secrets.token_hex(6).upper(), rejection_reasons=reasons)
-            self.save(loan)
-            self.event("decision", "Credit", f"Officer declined {loan['id']}", loan,
-                       {"role": role, "reasons": reasons, "operation_id": loan["decision_operation_id"]})
-            await self.issue_rejection(loan)
-            return await self.reply("Thank you for applying. We cannot proceed with this application. " + " ".join(reasons) + " Your rejection letter is attached.", loan)
-        if loan["risk"]["band"] == "unverified":
-            return await self.reply("Required sources are unavailable. Verify them and rerun the review before approving.", loan)
-        reason = re.search(r"\b(?:because|reason)\s*[:=]?\s*(.+)$", message, re.I)
-        if loan["risk"]["band"] == "high" and (not reason or len(reason.group(1).strip()) < 10):
-            return await self.reply("Overriding high risk requires a typed reason. Use ‘approve L-1042 because …’ with a specific explanation. Payout safeguards still apply.", loan)
-        amount_match = re.search(r"\bat\s+(\d+(?:\.\d{1,2})?)\b", message, re.I)
-        amount = float(amount_match.group(1)) if amount_match else loan["credit"]["recommended_amount"]
-        limit = min(loan["requested_amount"], loan["credit"]["eligible_amount"])
-        if not 0 < amount <= limit:
-            return await self.reply(f"The amount must be positive and no greater than the affordability limit of INR {limit:,.2f}. Use ‘approve {loan['id']} at AMOUNT’.", loan)
-        loan["approved_amount"] = amount
-        approved_terms = compute_affordability({**loan, "requested_amount": amount})
-        loan["credit"].update({k: v for k, v in approved_terms.items() if k not in {"summary", "reasons", "recommendation"}})
-        loan.update(status="approved", human_approved=True, approved_by_role=role,
-                    approved_at=utcnow().isoformat(), override_reason=reason.group(1) if reason else None,
-                    cooling_off_days=self.settings.cooling_off_days, grievance_contact="grievance@lendix.example",
-                    kfs_accepted=False)
+    def checked_decision_summary(self, text, decision):
+        summary = self.checked_summary(text)
+        conflicting = {
+            "decline": r"\b(?:approv\w*|sanctioned)\b",
+            "escalate": r"\b(?:approved|declined|sanctioned)\b",
+            "approve": r"\b(?:declined|rejected|rejection)\b",
+            "approve_lower": r"\b(?:declined|rejected|rejection)\b",
+        }
+        if re.search(conflicting[decision["decision"]], summary, re.I):
+            self.event("status", "Compliance", "Replaced explanatory wording that conflicted with the recorded decision.")
+            return f"The recorded outcome is {decision['decision']}. Policy rule: {decision['rule']}. The recorded inputs and reasons explain this result."
+        return summary
+
+    def record_underwriting(self, loan, evaluation, source, reason=None):
+        """Persist only a Python policy result or an authorized escalation decision."""
+        decision = copy.deepcopy(evaluation)
+        if reason:
+            decision["reasons"] = [reason, *decision["reasons"]]
+        loan["underwriting"] = decision
+        loan["decision"] = decision["decision"]
+        loan["decision_by"] = "risk_head" if source == "risk_head" else "underwriter"
+        loan["decision_at"] = utcnow().isoformat()
+        loan["decision_operation_id"] = "DEC-" + secrets.token_hex(6).upper()
+        loan["decision_reported"] = False
+        loan["approval_source"] = source
+        loan["override_reason"] = reason
+        loan.pop("decision_note_id", None)
+        for key in ("sanction_document_id", "kfs_document_id", "kfs_issued_at", "kfs_accepted_at", "acceptance_operation_id"):
+            loan.pop(key, None)
+        loan.update(kfs_issued=False, kfs_accepted=False, human_approved=False)
+        if decision["decision"] in {"approve", "approve_lower"}:
+            amount = decision["approved_amount"]
+            terms = compute_affordability({**loan, "requested_amount": amount})
+            loan["credit"].update(terms)
+            loan.update(status="approved", approved_amount=amount, human_approved=source == "risk_head",
+                        approved_by_role="risk_head" if source == "risk_head" else "underwriter",
+                        approved_at=loan["decision_at"], cooling_off_days=self.settings.cooling_off_days,
+                        grievance_contact="grievance@lendix.example")
+        elif decision["decision"] == "decline":
+            loan["status"] = "declined"
+            reasons = list(decision["reasons"])
+            if "PAYOUT_NAME_MISMATCH" in loan.get("risk", {}).get("codes", []):
+                reasons.insert(0, "The payout account is not in your name. Please use a verified bank account in your own name when applying again.")
+            loan["rejection_reasons"] = reasons
+            loan.pop("approved_amount", None)
+        else:
+            loan.update(status="escalated", escalated_for_decision=True)
+            loan.pop("approved_amount", None)
+        audit = {**copy.deepcopy(decision), "role": loan["decision_by"], "decision_source": source,
+                 "override_reason": reason, "operation_id": loan["decision_operation_id"], "at": loan["decision_at"]}
+        loan.setdefault("decision_history", []).append(copy.deepcopy(audit))
         self.save(loan)
-        self.event("decision", "Credit", f"Officer approved INR {amount:,.2f}", loan,
-                   {"role": role, "override_reason": loan["override_reason"]})
-        self.handoff("Credit", "Disbursement", loan, "human approval recorded")
-        await self.issue_approval_documents(loan)
-        return await self.reply(f"Officer approval recorded for {loan['id']}: INR {amount:,.2f}. The sanction letter and KFS are ready. The borrower must read the KFS and type ‘accept KFS {loan['id']}’ before payout.", loan)
+        self.event("decision", "Underwriter", f"{loan['decision_by']}: {decision['decision']} · Policy rule: {decision['rule']}", loan, audit)
+        if decision["decision"] == "escalate":
+            self.event("escalation", "Underwriter", f"Escalated: {decision['rule']}", loan, audit)
+
+    async def complete_decision(self, loan):
+        decision = loan["underwriting"]
+        if not decision.get("summary"):
+            note = await self.model.structured(AGENTS["Underwriter"],
+                {"decision": decision, "approval_source": loan["approval_source"], "override_reason": loan.get("override_reason")}, deep=True)
+            # Numeric decisions and deterministic reasons never come back from the model.
+            decision["summary"] = self.checked_decision_summary(note.summary, decision)
+            self.tool("Underwriter", "draft_decision_note", lambda: decision["summary"], loan)
+            self.save(loan)
+        note_file = await self.operation_document(loan, loan["decision_operation_id"], "decision_note",
+                                                   {"summary": decision["summary"], "reasons": decision["reasons"]})
+        loan["decision_note_id"] = note_file["document_id"]
+        self.save(loan)
+        chart = next((item for item in reversed(self.store.all("file"))
+                      if item["loan_id"] == loan["id"] and item["mime_type"] == "image/png"), None)
+        links = f"[Decision note]({note_file['url']})"
+        if chart:
+            links += f" · [Risk chart]({chart['url']})"
+        if decision["decision"] == "escalate":
+            self.tool("Underwriter", "escalate", lambda: None, loan)
+            self.handoff("Underwriter", "Reporter", loan, "policy exception needs the risk head")
+            await self.mention(f"{loan['id']} is escalated. Policy rule: {decision['rule']}. {links} Please decide with a typed reason.", loan)
+            await self.walk_to_risk_head(loan)
+            reply = f"{loan['id']} · Risk {loan.get('risk', {}).get('band', 'unverified')} · Escalated. Policy rule: {decision['rule']}. The risk head must review this exception and record a reason."
+        else:
+            self.handoff("Underwriter", "Compliance", loan, f"{loan['approval_source']} decision recorded")
+            if loan["status"] == "approved":
+                self.handoff("Compliance", "Disbursement", loan, "approval authority recorded")
+                await self.issue_approval_documents(loan)
+                reply = f"Approval recorded for {loan['id']}: INR {loan['approved_amount']:,.2f} by {loan['approval_source']}. Policy rule: {decision['rule']}. The sanction letter and KFS are ready; the borrower must accept the KFS before simulated payout."
+            else:
+                await self.issue_rejection(loan)
+                reply = "Thank you for applying. We cannot proceed with this application. " + " ".join(loan["rejection_reasons"]) + " Your rejection letter is attached."
+            await self.progress(f"FYI @risk_team: {loan['id']} {decision['decision']} by {loan['approval_source']}. Policy v{decision['policy_version']} · {decision['rule']}. {links}")
+        loan["decision_reported"] = True
+        self.save(loan)
+        return await self.reply(reply, loan, "Underwriter")
+
+    async def walk_to_risk_head(self, loan):
+        if self.adapter:
+            await self.adapter.office_action("walk_to", user="risk_head", loan_id=loan["id"])
+        else:
+            self.event("office_action", "Reporter", "Local demonstration: walk_to risk_head", loan,
+                       {"name": "walk_to", "user": "risk_head"})
+
+    @staticmethod
+    def typed_reason(message):
+        reason = re.search(r"\b(?:because|reason)\s*[:=]?\s*(.+)$", message, re.I)
+        return reason.group(1).strip() if reason and len(reason.group(1).strip()) >= 10 else None
+
+    async def request_override(self, loan, message, role):
+        if role != "risk_head":
+            return await self.reply("Only the risk head can request an override with a typed reason.", loan)
+        reason = self.typed_reason(message)
+        if not reason:
+            return await self.reply("An override needs a typed reason. Use ‘override L-1043 because …’ with a specific explanation.", loan)
+        if not check_message(reason, borrower_facing=False)["allowed"]:
+            return await self.reply("Please give a factual, respectful reason that follows the message policy.", loan)
+        if loan.get("status") not in {"approved", "declined"} or loan.get("approval_source") != "policy":
+            return await self.reply("Only an automatic decision before disbursement can be requested for override. An existing escalation needs an explicit approve or decline command with a reason.", loan)
+        result = self.tool("Underwriter", "apply_policy", lambda: apply_policy(loan, self.policy, override_request=True), loan)
+        loan["override_requested_by"] = role
+        loan["override_requested_reason"] = reason
+        loan["policy_evaluation"] = copy.deepcopy(result)
+        self.record_underwriting(loan, result, "policy", reason)
+        return await self.complete_decision(loan)
+
+    async def decide(self, loan, message, role):
+        if role != "risk_head":
+            return await self.reply("Only the risk head can decide an escalated loan, with a typed reason.", loan)
+        if loan.get("status") != "escalated" or not loan.get("escalated_for_decision"):
+            return await self.reply("The risk head can only approve or decline escalated loans. For an automatic decision, first request an override with a typed reason.", loan)
+        reason = self.typed_reason(message)
+        if not reason:
+            return await self.reply("Every risk-head decision needs a typed reason. Use ‘approve L-1045 at 200000 because …’ or ‘decline L-1045 because …’ with a specific explanation.", loan)
+        if not check_message(reason, borrower_facing=False)["allowed"]:
+            return await self.reply("Please give a factual, respectful reason that follows the message policy.", loan)
+        command = re.split(r"\b(?:because|reason)\b", message, maxsplit=1, flags=re.I)[0].strip()
+        parsed = re.fullmatch(r"(approve|decline)\s+(L-\d+)(?:\s+at\s+(\d+(?:\.\d{1,2})?))?", command, re.I)
+        if not parsed or (parsed.group(1).lower() == "decline" and parsed.group(3)):
+            return await self.reply("Use approve or decline, the loan ID, an optional positive approval amount, and a typed reason.", loan)
+        decision = copy.deepcopy(loan["policy_evaluation"])
+        decision.pop("summary", None)
+        decision["decision"] = parsed.group(1).lower()
+        decision["approved_amount"] = None
+        if decision["decision"] == "approve":
+            if loan.get("risk", {}).get("band") == "unverified":
+                return await self.reply("Required verification sources are unavailable. Resolve them before approval; a typed reason cannot replace verification.", loan)
+            amount = float(parsed.group(3)) if parsed.group(3) else min(loan["requested_amount"], loan["credit"]["eligible_amount"])
+            limit = min(loan["requested_amount"], loan["credit"]["eligible_amount"])
+            if not 0 < amount <= limit or amount <= loan["credit"]["fees"]:
+                return await self.reply(f"Approval must be positive, exceed the disclosed fees and not exceed the affordability limit of INR {limit:,.2f}.", loan)
+            decision.update(decision="approve_lower" if amount < loan["requested_amount"] else "approve", approved_amount=amount)
+        self.record_underwriting(loan, decision, "risk_head", reason)
+        return await self.complete_decision(loan)
 
     async def issue_approval_documents(self, loan):
-        if not loan.get("sanction_document_id"):
-            sanction = await self.document("sanction_letter", loan)
-            loan["sanction_document_id"] = sanction["document_id"]
-            self.save(loan)
-        self.tool("Disbursement", "make_kfs", lambda: None, loan)
-        kfs = await self.document("key_facts_statement", loan)
-        loan.update(kfs_issued=True, kfs_document_id=kfs["document_id"], kfs_issued_at=utcnow().isoformat())
+        operation_id = loan["decision_operation_id"]
+        sanction = await self.operation_document(loan, operation_id, "sanction_letter")
+        loan["sanction_document_id"] = sanction["document_id"]
+        if not loan.get("kfs_issued"):
+            self.tool("Disbursement", "make_kfs", lambda: None, loan)
+            kfs = await self.operation_document(loan, operation_id, "key_facts_statement")
+            loan.update(kfs_issued=True, kfs_document_id=kfs["document_id"], kfs_issued_at=kfs["created_at"])
         self.save(loan)
 
     async def issue_rejection(self, loan):
@@ -402,7 +507,7 @@ class Orchestrator:
         if loan.get("status") == "disbursed":
             return await self.reply("The seeded simulated payout is already recorded; no duplicate payout was made.", loan)
         if loan.get("status") != "approved":
-            return await self.reply("The loan needs officer approval before a simulated payout.", loan)
+            return await self.reply("The loan needs policy or risk-head approval before a simulated payout.", loan)
         result = self.tool("Compliance", "check_disbursement",
                            lambda: check_disbursement(loan, now=now, demo_skip_cooling=self.settings.demo_skip_cooling), loan)
         if not result["allowed"]:
@@ -475,16 +580,31 @@ class Orchestrator:
 
     async def hardship(self, loan, message):
         if loan.get("status") not in {"disbursed", "restructure_requested"}:
-            return await self.reply("I’m sorry to hear about your situation. A restructure request needs an active disbursed loan. The officer can discuss your application instead.", loan)
+            return await self.reply("I’m sorry to hear about your situation. A restructure request needs an active disbursed loan. The risk head can discuss your application instead.", loan)
         self.handoff("Front Desk", "Collections", loan, "borrower reported hardship")
         draft = await self.model.structured(AGENTS["Collections"], {"message": message}, human_message=True)
         summary = self.checked_summary(draft.summary)
         self.tool("Collections", "request_restructure", lambda: None, loan)
-        loan.update(status="restructure_requested", hardship_summary=summary)
+        self.handoff("Collections", "Underwriter", loan, "restructure request requires policy escalation")
+        evaluation = self.tool("Underwriter", "apply_policy", lambda: apply_policy(loan, self.policy, restructure_request=True), loan)
+        operation_id = "RESTRUCTURE-" + secrets.token_hex(6).upper()
+        loan.update(status="restructure_requested", hardship_summary=summary, servicing_escalation=evaluation,
+                    servicing_escalation_id=operation_id)
         self.save(loan)
+        audit = {**copy.deepcopy(evaluation), "role": "underwriter", "decision_source": "policy",
+                 "operation_id": operation_id, "scope": "restructure"}
+        self.tool("Underwriter", "escalate", lambda: None, loan)
+        self.event("decision", "Underwriter", "Policy rule: restructure request", loan, audit)
+        self.event("escalation", "Underwriter", "Restructure request escalated to the risk head.", loan, audit)
+        note = await self.model.structured(AGENTS["Underwriter"], {"decision": evaluation}, deep=True)
+        note_summary = self.checked_decision_summary(note.summary, evaluation)
+        self.tool("Underwriter", "draft_decision_note", lambda: note_summary, loan)
+        await self.operation_document(loan, operation_id, "decision_note",
+                                      {"underwriting": evaluation, "summary": note_summary, "reasons": evaluation["reasons"]})
         await self.document("restructure_request", loan, {"summary": summary, "hardship": message})
         await self.mention(f"Please review the hardship request for {loan['id']}. No revised terms have been promised.", loan)
-        return await self.reply("I’m sorry you’re going through this. I have prepared a restructure request for the credit officer. They will review possible options; no revised terms are approved yet.", loan, "Collections")
+        await self.walk_to_risk_head(loan)
+        return await self.reply("I’m sorry you’re going through this. I have prepared a restructure request for the risk head. They will review possible options; no revised terms are approved yet.", loan, "Collections")
 
     async def exit_loan(self, loan, now):
         if loan.get("status") == "closed" and loan.get("exit_reason") == "cooling_off":
@@ -498,10 +618,10 @@ class Orchestrator:
             self.event("decision", "Disbursement", "Borrower withdrew before payout; no penalty.", loan)
             return await self.reply("Your loan was withdrawn before payout. No money moved and no penalty is payable.", loan)
         if loan.get("status") != "disbursed":
-            return await self.reply("Cooling-off exit is available for an approved or newly disbursed loan. The officer can help with other closure requests.", loan)
+            return await self.reply("Cooling-off exit is available for an approved or newly disbursed loan. The risk head can help with other closure requests.", loan)
         started = datetime.fromisoformat(loan["disbursed_at"])
         if now > started + timedelta(days=loan.get("cooling_off_days", self.settings.cooling_off_days)):
-            return await self.reply("The cooling-off window has ended. I can ask the credit officer to review an early repayment request.", loan)
+            return await self.reply("The cooling-off window has ended. I can ask the risk head to review an early repayment request.", loan)
         loan.update(status="closed", outstanding=0, outstanding_balance=0, closed_at=now.isoformat(), exit_penalty=0,
                     exit_reason="cooling_off", simulated_refund=loan["approved_amount"],
                     closure_operation_id="CLOSE-" + secrets.token_hex(6).upper())
@@ -531,7 +651,7 @@ class Orchestrator:
             self.store.put("reminder", loan["id"], {"loan_id": loan["id"], "due_at": due.isoformat(), "conversation_id": self.conversation, "status": "scheduled"})
             self.event("status", "Collections", "Reminder scheduled for 08:00 IST.", loan)
             return await self.reply("Borrower contact is allowed only from 08:00 to 19:00 IST. I have scheduled the reminder for 08:00 IST.", loan)
-        message = f"A friendly reminder for {loan['id']}: please check your repayment schedule for the next EMI. If paying is difficult, we can ask the officer to review your options."
+        message = f"A friendly reminder for {loan['id']}: please check your repayment schedule for the next EMI. If paying is difficult, we can ask the risk head to review your options."
         result = self.tool("Compliance", "check_message", lambda: check_message(message, now=now), loan)
         if not result["allowed"]:
             return await self.reply("The reminder is blocked by the contact policy.", loan)
@@ -560,11 +680,24 @@ class Orchestrator:
     async def export_queue(self):
         rows = [{"loan_id": x["id"], "name": x["name"], "status": x.get("status", "new"),
                  "risk_band": x.get("risk", {}).get("band", "unverified"),
-                 "recommendation": x.get("credit", {}).get("recommendation", "pending"),
+                 "decision": x.get("underwriting", {}).get("decision", "pending"),
+                 "policy_rule": x.get("underwriting", {}).get("rule", "Not evaluated"),
+                 "policy_version": x.get("underwriting", {}).get("policy_version"),
+                 "approval_source": x.get("approval_source", "Not decided"),
+                 "approved_amount": x.get("approved_amount"),
                  "requested_amount": x.get("requested_amount"),
                  "recommended_amount": x.get("credit", {}).get("recommended_amount")} for x in self.store.all("loan")]
         for fmt in ("csv", "xlsx"):
-            await self.document("review_queue", {"id": "PORTFOLIO"}, {"rows": rows}, fmt)
+            await self.document("review_queue", {"id": "PORTFOLIO"}, {"rows": rows, "counts": self.decision_counts(self.store.all("loan"))}, fmt)
+
+    @staticmethod
+    def decision_counts(loans):
+        return {
+            "auto_approved": sum(x.get("approval_source") == "policy" and x.get("underwriting", {}).get("decision") in {"approve", "approve_lower"} for x in loans),
+            "auto_declined": sum(x.get("approval_source") == "policy" and x.get("underwriting", {}).get("decision") == "decline" for x in loans),
+            "escalated": sum(x.get("status") in {"escalated", "restructure_requested"} for x in loans),
+            "risk_head_decided": sum(x.get("approval_source") == "risk_head" for x in loans),
+        }
 
     async def dashboard(self):
         await self.document("portfolio_dashboard", {"id": "PORTFOLIO"}, {"loans": self.store.all("loan")}, "png")
@@ -573,7 +706,7 @@ class Orchestrator:
         pending = None if new_application else self.store.get("conversation", self.conversation)
         loan = loan or (self.store.get("loan", pending["loan_id"]) if pending else None)
         if loan and loan.get("status") not in {"new", "pending", "received", "awaiting_documents"}:
-            return await self.reply("This application has already been reviewed. Ask the officer to open a new application for changed terms.", loan)
+            return await self.reply("This application has already been reviewed. Ask the risk head to open a new application for changed terms.", loan)
         if not loan:
             next_id = max(int(x["id"].split("-")[1]) for x in self.store.all("loan")) + 1
             loan = {"id": f"L-{next_id}", "name": "", "status": "new", "documents": [],

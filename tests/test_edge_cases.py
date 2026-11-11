@@ -74,13 +74,13 @@ def test_selected_upload_rechecks_state_after_waiting_for_lock(web_office):
         assert response.status_code == 202
         # Simulate a preceding review completing while the upload waits its turn.
         reviewed = store.get("loan", "L-1043")
-        reviewed.update(status="awaiting_decision", risk={"band": "low", "codes": []})
+        reviewed.update(status="approved", risk={"band": "low", "codes": []}, approval_source="policy")
         store.put("loan", "L-1043", reviewed)
     finally:
         client.portal.call(office.lock.release)
     wait_for_job(client, response)
     retained = store.get("loan", "L-1043")
-    assert retained["status"] == "awaiting_decision"
+    assert retained["status"] == "approved"
     assert retained["name"] == "Mira Desai"
     assert retained["risk"]["band"] == "low"
 
@@ -106,7 +106,6 @@ async def test_application_without_name_asks_for_name_first(office):
 @pytest.mark.asyncio
 async def test_failed_kfs_render_can_be_retried_without_duplicate_approval(office, monkeypatch):
     runner, store = office
-    await runner.run("review L-1043", role="ops")
     render = runner.documents.render
     failures = []
 
@@ -117,12 +116,12 @@ async def test_failed_kfs_render_can_be_retried_without_duplicate_approval(offic
         return render(kind, *args, **kwargs)
 
     monkeypatch.setattr(runner.documents, "render", fail_once)
-    reply = await runner.run("approve L-1043", role="credit_officer")
+    reply = await runner.run("review L-1043", role="ops")
     assert "failure" in reply.lower() or "retry" in reply.lower()
     assert not store.get("loan", "L-1043").get("kfs_issued")
-    await runner.run("approve L-1043", role="credit_officer")
+    await runner.run("review L-1043", role="ops")
     assert store.get("loan", "L-1043").get("kfs_issued") is True
-    approvals = [event for event in store.all_events() if event["kind"] == "decision" and event["data"].get("role") == "credit_officer"]
+    approvals = [event for event in store.all_events() if event["kind"] == "decision" and event["data"].get("role") == "underwriter"]
     assert len(approvals) == 1
 
 
@@ -146,7 +145,6 @@ def issued(store, kind, loan_id):
 
 async def approve_clean(runner):
     await runner.run("review L-1043", role="ops")
-    await runner.run("approve L-1043", role="credit_officer")
 
 
 async def disburse_clean(runner):
@@ -158,19 +156,18 @@ async def disburse_clean(runner):
 @pytest.mark.asyncio
 async def test_rejection_render_retry_preserves_one_decision(office, monkeypatch):
     runner, store = office
-    await runner.run("add bank statement L-1042", role="ops")
     failed = fail_render_once(monkeypatch, runner, "rejection_letter")
-    await runner.run("decline L-1042", role="credit_officer")
+    await runner.run("add bank statement L-1042", role="ops")
     first = store.get("loan", "L-1042")
     assert failed and first["status"] == "declined"
     assert not issued(store, "rejection_letter", "L-1042")
-    await runner.run("decline L-1042", role="credit_officer")
-    await runner.run("decline L-1042", role="credit_officer")
+    await runner.run("review L-1042", role="ops")
+    await runner.run("review L-1042", role="ops")
     retained = store.get("loan", "L-1042")
     assert retained["decision_operation_id"] == first["decision_operation_id"]
     assert retained["decision_at"] == first["decision_at"]
     assert len(issued(store, "rejection_letter", "L-1042")) == 1
-    assert sum(event["kind"] == "decision" and event["text"].startswith("Officer declined") for event in store.all_events()) == 1
+    assert sum(event["kind"] == "decision" and event["data"].get("role") == "underwriter" for event in store.all_events()) == 1
 
 
 @pytest.mark.asyncio

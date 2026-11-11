@@ -2,22 +2,21 @@
 
 (() => {
   const $ = (id) => document.getElementById(id);
-  const roleNames = { credit_officer: "Credit officer", ops: "Operations", borrower: "Borrower" };
-  const roleInitials = { credit_officer: "CO", ops: "OP", borrower: "BR" };
+  const roleNames = { risk_head: "Risk head", ops: "Operations", borrower: "Borrower" };
+  const roleInitials = { risk_head: "RH", ops: "OP", borrower: "BR" };
   const contextActions = {
     "L-1042": [
       ["Review application", "review L-1042"],
       ["Add bank statement", "add bank statement L-1042"],
-      ["Decline", "decline L-1042"],
     ],
     "L-1043": [
       ["Review", "review L-1043"],
-      ["Approve", "approve L-1043"],
       ["Accept KFS", "accept KFS L-1043"],
       ["Disburse", "disburse L-1043"],
       ["Pay EMI", "pay EMI L-1043"],
       ["Close", "close L-1043"],
     ],
+    "L-1045": [["Review policy exception", "review L-1045"]],
     "L-1044": [["Request hardship support", "I lost my job L-1044"], ["Review", "review L-1044"]],
   };
   let state = { loans: [], documents: [], users: [] };
@@ -35,6 +34,7 @@
   const seenEvents = new Set();
   const localDocuments = new Map();
   const agentTimers = new Map();
+  const exceptionDrafts = new Map();
   const conversationId = `console-${typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
 
   const el = (tag, className, text) => {
@@ -135,6 +135,7 @@
   }
 
   function renderContext() {
+    renderEscalated();
     const loan = selectedLoanInfo();
     const status = String(loan?.status || "Not reviewed");
     const statusNode = $("loan-status");
@@ -142,7 +143,7 @@
     statusNode.className = "status-badge";
     if (/declin|reject|high|block/i.test(status)) statusNode.classList.add("danger");
     else if (/approv|active|disburs|paid|closed|complete/i.test(status) && !/await|pending|recommend/i.test(status)) statusNode.classList.add("success");
-    else if (/missing|await|pending|review|recommend/i.test(status)) statusNode.classList.add("warning");
+    else if (/missing|await|pending|review|recommend|escalat/i.test(status)) statusNode.classList.add("warning");
     const risk = loanRisk(loan);
     $("loan-risk").textContent = risk ? `${humanize(risk)} risk` : "Risk not assessed";
     $("loan-risk").className = `risk-label ${["low", "medium", "high"].includes(risk) ? risk : ""}`;
@@ -222,7 +223,7 @@
 
   function renderState() {
     $("metric-loans").textContent = String(state.loans.length);
-    const waiting = state.loans.filter((loan) => /pending_decision|awaiting_approval|awaiting_decision|ready_for_decision|under_review|reviewed|recommended/i.test(loan.status || ""));
+    const waiting = state.loans.filter((loan) => ["escalated", "restructure_requested"].includes(loan.status));
     $("metric-pending").textContent = String(waiting.length);
     $("queue-count").textContent = String(waiting.length);
     const select = $("loan-select");
@@ -240,6 +241,74 @@
     }
     select.value = selectedLoan;
     renderContext();
+    renderEscalated();
+  }
+
+  function renderEscalated() {
+    const cases = state.loans.filter((loan) => ["escalated", "restructure_requested"].includes(loan.status));
+    $("escalated-count").textContent = String(cases.length);
+    const isRiskHead = $("role-select").value === "risk_head";
+    $("escalated-help").textContent = isRiskHead ? "Record a specific reason for every exception decision." : "Select the Risk head demo role to decide credit exceptions.";
+    const list = $("escalated-list");
+    const active = document.activeElement;
+    const editing = active?.closest(".exception-form");
+    if (editing && ["INPUT", "TEXTAREA"].includes(active.tagName) && cases.some((loan) => loan.id === editing.dataset.exceptionLoan)) return;
+    list.replaceChildren();
+    if (!cases.length) {
+      list.append(el("p", "escalated-empty", "No exceptions waiting. Review L-1045 to see a policy escalation."));
+      return;
+    }
+    for (const loan of cases) {
+      const card = el("article", "escalated-case");
+      const focus = el("button", "escalated-focus", `${loan.id} · ${loan.name}`);
+      focus.type = "button";
+      focus.dataset.selectLoan = loan.id;
+      card.append(focus, el("p", "escalated-reason", loan.servicing_escalation?.rule || loan.underwriting?.rule || "Policy exception"));
+      const note = allDocuments().find((item) => item.loan_id === loan.id && item.kind === "decision_note");
+      if (note) card.append(fileLink(note));
+      if (loan.status === "restructure_requested") {
+        card.append(el("p", "escalated-reason", "Hardship request for risk-head review. Revised terms require a separate servicing process."));
+      } else {
+        const draft = exceptionDrafts.get(loan.id) || {};
+        const form = el("form", "exception-form");
+        form.dataset.exceptionLoan = loan.id;
+        const choiceLabel = el("label", "", "Decision");
+        const choice = el("select");
+        choice.name = "decision";
+        for (const value of ["approve", "decline"]) { const option = el("option", "", humanize(value)); option.value = value; choice.append(option); }
+        choice.value = draft.decision || "approve";
+        choiceLabel.append(choice);
+        const amountLabel = el("label", "", "Approval amount (INR)");
+        const amount = el("input");
+        amount.name = "amount"; amount.type = "number"; amount.min = "0.01"; amount.step = "0.01";
+        amount.max = String(Math.min(loan.requested_amount, loan.credit?.eligible_amount || 0));
+        amount.value = draft.amount || String(Math.min(200000, Number(amount.max)));
+        amount.required = choice.value === "approve";
+        amountLabel.append(amount);
+        const reasonLabel = el("label", "", "Reason (required)");
+        const reason = el("textarea");
+        reason.name = "reason"; reason.required = true; reason.minLength = 10; reason.maxLength = 1500; reason.rows = 2;
+        reason.placeholder = "Explain the evidence supporting this decision";
+        reason.value = draft.reason || "";
+        reasonLabel.append(reason);
+        const submit = el("button", "send-button", "Record decision");
+        submit.type = "submit";
+        for (const field of [choice, amount, reason, submit]) field.disabled = !isRiskHead;
+        form.append(choiceLabel, amountLabel, reasonLabel, submit);
+        form.addEventListener("input", () => {
+          amount.required = choice.value === "approve";
+          exceptionDrafts.set(loan.id, {decision: choice.value, amount: amount.value, reason: reason.value});
+        });
+        form.addEventListener("submit", (event) => {
+          event.preventDefault();
+          if (!form.reportValidity()) return;
+          const terms = choice.value === "approve" ? ` at ${amount.value}` : "";
+          sendMessage(`${choice.value} ${loan.id}${terms} because ${reason.value.trim()}`);
+        });
+        card.append(form);
+      }
+      list.append(card);
+    }
   }
 
   async function responseData(response) {
@@ -514,6 +583,7 @@
   $("role-select").addEventListener("change", (event) => {
     const role = event.currentTarget.value;
     $("role-avatar").textContent = roleInitials[role];
+    renderEscalated();
     showToast(`Demo role changed to ${roleNames[role].toLowerCase()}. This is a synthetic identity, not authentication.`);
   });
   $("document-filter").addEventListener("change", renderDocuments);

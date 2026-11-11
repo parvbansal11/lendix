@@ -14,10 +14,14 @@ from app.documents import DocumentService, TEMPLATES, WATERMARK
 @pytest.fixture
 def loan():
     return {
-        "id": "L-1043", "name": "Meera Vasant", "status": "approved", "decision": "approved",
+        "id": "L-1043", "name": "Meera Vasant", "status": "approved", "decision": "approve",
+        "approval_source": "policy", "decision_by": "Underwriter",
+        "underwriting": {"decision": "approve", "policy_version": 1, "rule": "automatic approval",
+                         "inputs": {"risk_band": "low", "reason_codes": [], "foir": .27, "requested_amount": 150000, "eligible_amount": 180000},
+                         "reasons": ["The amount and affordability meet the automatic approval policy."], "approved_amount": 150000},
         "monthly_income": 50000, "requested_amount": 150000, "approved_amount": 150000,
         "tenure_months": 12, "annual_rate": .15, "fees": {"processing": 1500, "tax": 270},
-        "credit": {"recommendation": "approve", "eligible_amount": 180000, "recommended_amount": 150000,
+        "credit": {"recommendation": "affordable", "eligible_amount": 180000, "recommended_amount": 150000,
                    "max_emi": 25000, "emi": 13538.75, "foir": .27, "apr": .1721,
                    "total_repayment": 162465, "total_interest": 12465, "total_cost": 164235},
         "risk": {"band": "low", "flags": [], "source_status": "verified"},
@@ -69,6 +73,31 @@ def test_live_rules_and_payment_fields_are_rendered(tmp_path, loan):
         assert value in text
 
 
+@pytest.mark.parametrize("decision,rule,band", [("decline", "hard fraud flag", "high"), ("approve", "automatic approval", "low"), ("escalate", "risk band requires review", "medium")])
+def test_policy_decision_note_records_exact_rule_inputs_and_version(tmp_path, loan, decision, rule, band):
+    loan["underwriting"].update(decision=decision, rule=rule, policy_version=7,
+                                inputs={"risk_band": band, "reason_codes": ["NEW_NUMBER"], "foir": .38, "requested_amount": 300000, "eligible_amount": 340000},
+                                reasons=["This result follows the recorded policy rule."])
+    artifact = DocumentService(tmp_path).render("decision_note", loan)
+    assert artifact["kind"] == "decision_note"
+    text = "\n".join(p.extract_text() for p in PdfReader(artifact["path"]).pages)
+    for value in (f"Policy rule: {rule}", "Policy version", "7", "Policy input snapshot", "reason_codes", "NEW_NUMBER", "0.38", "300000", "340000", "This result follows the recorded policy rule."):
+        assert value in text
+    assert "credit officer" not in text.lower()
+
+
+def test_risk_head_note_preserves_original_policy_and_typed_reason(tmp_path, loan):
+    original = {"decision": "escalate", "policy_version": 1, "rule": "amount above limit", "inputs": {"requested_amount": 300000, "foir": .38}, "reasons": ["The request exceeds the automatic approval ceiling."]}
+    loan.update(policy_evaluation=original, approval_source="risk_head", decision_by="risk_head", approved_amount=200000,
+                override_reason="Reduced amount fits verified repayment capacity after reviewing the exception.")
+    loan["underwriting"] = {**original, "decision": "approve_lower", "reasons": [loan["override_reason"], *original["reasons"]], "approved_amount": 200000}
+    artifact = DocumentService(tmp_path).render("credit_appraisal", loan)
+    assert artifact["kind"] == "decision_note"
+    text = "\n".join(p.extract_text() for p in PdfReader(artifact["path"]).pages)
+    for value in ("Original policy evaluation", "Decision: escalate", "Policy rule: amount above limit", "approve_lower", "risk_head", "200,000.00", "Reduced amount fits verified repayment capacity", "300000"):
+        assert value in text
+
+
 def test_long_schedule_repeats_watermark_on_every_page(tmp_path, loan):
     rows = [{"installment": n, "due_date": "2027-01-01", "emi": 1000, "principal": 800, "interest": 200, "balance": 60000 - n * 800} for n in range(1, 61)]
     artifact = DocumentService(tmp_path).render("repayment_schedule", loan, {"schedule": rows})
@@ -104,6 +133,9 @@ def test_queue_csv_and_excel_are_inert_and_typed(tmp_path, loan):
     csv_artifact = service.render("daily_review_queue", {}, {"rows": rows}, "csv")
     table = list(csv.reader(io.StringIO(Path(csv_artifact["path"]).read_text(encoding="utf-8-sig"))))
     assert table[1][1] == "'=1+1"
+    assert table[0][4:8] == ["decision", "policy_rule", "policy_version", "approval_source"]
+    assert table[1][4:8] == ["approve", "automatic approval", "1", "policy"]
+    assert ["# auto_approved", "1"] in table
     assert any(WATERMARK in row for row in table)
     artifact = service.render("review_queue", {}, {"rows": rows}, "xlsx")
     workbook = load_workbook(artifact["path"])
@@ -111,6 +143,10 @@ def test_queue_csv_and_excel_are_inert_and_typed(tmp_path, loan):
     assert sheet["B4"].value == "'=1+1"
     assert sheet["B4"].data_type != "f"
     assert sheet["C4"].value == 150000
+    assert sheet["F4"].value == "automatic approval"
+    assert sheet["G4"].value == 1
+    assert sheet["H4"].value == "policy"
+    assert sheet["J4"].value == 150000
     assert sheet.freeze_panes == "A4"
     assert any(cell.value == WATERMARK for row in sheet for cell in row)
     assert any(cell.value == artifact["document_id"] for row in sheet for cell in row)

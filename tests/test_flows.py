@@ -3,7 +3,9 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
+from pypdf import PdfReader
 
+from app.agents import UnderwriterOutput
 from app.config import ROOT, Settings
 from app.model import FakeClient
 from app.orchestrator import Orchestrator
@@ -26,6 +28,11 @@ def artifacts(store, loan_id):
     return [item for item in store.all("file") if item["loan_id"] == loan_id]
 
 
+def credit_decisions(store, loan_id):
+    return [event for event in store.all_events() if event["kind"] == "decision"
+            and event["loan_id"] == loan_id and event["data"].get("role") in {"underwriter", "risk_head"}]
+
+
 @pytest.mark.asyncio
 async def test_mismatched_application_complete_to_respectful_rejection(office):
     runner, store, model = office
@@ -35,19 +42,31 @@ async def test_mismatched_application_complete_to_respectful_rejection(office):
     assert not model.calls
     review = await runner.run("add bank statement L-1042", role="ops")
     loan = store.get("loan", "L-1042")
-    assert loan["status"] == "awaiting_decision"
+    assert loan["status"] == "declined"
     assert loan["risk"]["band"] == "high"
     assert {"PAYOUT_NAME_MISMATCH", "NEW_NUMBER"} <= set(loan["risk"]["codes"])
-    assert loan["credit"]["recommendation"] == "decline"
-    assert "credit officer" in review.lower()
+    assert loan["credit"]["foir"] == pytest.approx(.38, abs=.005)
+    assert loan["underwriting"]["decision"] == "decline"
+    assert loan["underwriting"]["rule"] == "hard fraud flag"
+    assert loan["underwriting"]["policy_version"] == 1
+    assert loan["underwriting"]["inputs"] and loan["underwriting"]["reasons"]
+    assert "account in your own name" in review
     assert len(model.calls) <= 6
-    assert any(event["kind"] == "mention" and "@officer" in event["text"] for event in store.all_events())
-    assert {"risk_report", "credit_appraisal"} <= {item["kind"] for item in artifacts(store, "L-1042")}
+    assert ("Underwriter", "UnderwriterOutput") in model.calls
+    assert any(event["kind"] == "progress" and "FYI" in event["text"] and "risk_team" in event["text"] for event in store.all_events())
+    assert not any(event["kind"] == "mention" and "@risk_head" in event["text"] for event in store.all_events())
+    assert {"risk_report", "decision_note", "rejection_letter"} <= {item["kind"] for item in artifacts(store, "L-1042")}
     assert any(item["mime_type"] == "image/png" for item in artifacts(store, "L-1042"))
-    rejected = await runner.run("decline L-1042", role="credit_officer")
-    assert "account in your own name" in rejected
-    assert store.get("loan", "L-1042")["status"] == "declined"
-    assert any(item["kind"] == "rejection_letter" for item in artifacts(store, "L-1042"))
+    note = next(item for item in artifacts(store, "L-1042") if item["kind"] == "decision_note")
+    note_text = "\n".join(page.extract_text() for page in PdfReader(note["path"]).pages)
+    assert "Policy rule: hard fraud flag" in note_text
+    decisions = credit_decisions(store, "L-1042")
+    assert len(decisions) == 1
+    assert decisions[0]["data"]["role"] == "underwriter"
+    assert decisions[0]["data"]["decision_source"] == "policy"
+    assert decisions[0]["data"]["policy_version"] == 1
+    assert decisions[0]["data"]["rule"] == "hard fraud flag"
+    assert decisions[0]["data"]["inputs"] and decisions[0]["data"]["reasons"]
     assert all(Path(item["path"]).stat().st_size > 100 for item in artifacts(store, "L-1042"))
     document_ids = {item["document_id"] for item in artifacts(store, "L-1042")}
     logged = {event["data"].get("document_id") for event in store.all_events() if event["kind"] == "document"}
@@ -59,9 +78,11 @@ async def test_clean_application_full_lifecycle_and_repeat_guards(office):
     runner, store, _ = office
     await runner.run("review L-1043", role="ops")
     loan = store.get("loan", "L-1043")
-    assert loan["risk"]["band"] == "low" and loan["status"] == "awaiting_decision"
-    approval = await runner.run("approve L-1043", role="credit_officer")
-    assert "approval recorded" in approval.lower()
+    assert loan["risk"]["band"] == "low" and loan["status"] == "approved"
+    assert loan["requested_amount"] == loan["approved_amount"] == 100000
+    assert loan["underwriting"]["decision"] == "approve"
+    assert loan["approval_source"] == "policy"
+    assert not loan.get("human_approved")
     assert store.get("loan", "L-1043")["kfs_issued"]
     blocked = await runner.run("disburse L-1043", role="ops")
     assert "Payout blocked" in blocked and "Key Facts Statement" in blocked
@@ -87,19 +108,54 @@ async def test_clean_application_full_lifecycle_and_repeat_guards(office):
     count = len(artifacts(store, "L-1043"))
     assert "already closed" in await runner.run("close L-1043", role="ops")
     assert len(artifacts(store, "L-1043")) == count
-    decisions = [event for event in store.all_events() if event["kind"] == "decision"]
-    assert any(event["data"].get("role") == "credit_officer" for event in decisions)
+    decisions = credit_decisions(store, "L-1043")
+    assert len(decisions) == 1 and decisions[0]["data"]["role"] == "underwriter"
+    assert decisions[0]["data"]["decision_source"] == "policy"
 
 
 @pytest.mark.asyncio
-async def test_hardship_requests_officer_review_without_promising_terms(office):
+async def test_borderline_application_escalates_then_risk_head_approves_lower_amount(office):
+    runner, store, model = office
+    await runner.run("review L-1045", role="ops")
+    loan = store.get("loan", "L-1045")
+    assert loan["requested_amount"] == 300000
+    assert loan["risk"]["band"] == "medium"
+    assert loan["status"] == "escalated"
+    assert loan["underwriting"]["decision"] == "escalate"
+    assert not loan.get("approved_amount") and not loan.get("kfs_issued")
+    assert len(model.calls) <= 6
+    events = store.all_events()
+    assert any(event["kind"] == "mention" and "@risk_head" in event["text"] for event in events)
+    assert any(event["kind"] == "office_action" and "walk_to" in event["text"] for event in events)
+    assert any(event["kind"] == "tool" and event["agent"] == "Underwriter" and event["text"] == "escalate" for event in events)
+    assert {"decision_note", "risk_report"} <= {item["kind"] for item in artifacts(store, "L-1045")}
+    reason = "Verified affordability and recorded mitigants"
+    await runner.run(f"approve L-1045 at 200000 because {reason}", role="risk_head")
+    loan = store.get("loan", "L-1045")
+    assert loan["status"] == "approved" and loan["approved_amount"] == 200000
+    assert loan["approval_source"] == "risk_head" and loan["human_approved"]
+    assert loan["kfs_issued"]
+    human = [event for event in credit_decisions(store, "L-1045") if event["data"]["role"] == "risk_head"]
+    assert len(human) == 1
+    assert reason in str(human[0]["data"])
+    assert human[0]["data"]["policy_version"] == 1
+    assert human[0]["data"]["rule"] and human[0]["data"]["inputs"] and human[0]["data"]["reasons"]
+    await runner.run("accept KFS L-1045", role="borrower")
+    await runner.run("disburse L-1045", role="ops")
+    assert store.get("loan", "L-1045")["status"] == "disbursed"
+    assert {"sanction_letter", "key_facts_statement", "disbursement_advice", "repayment_schedule"} <= {item["kind"] for item in artifacts(store, "L-1045")}
+
+
+@pytest.mark.asyncio
+async def test_hardship_escalates_to_risk_head_without_promising_terms(office):
     runner, store, model = office
     reply = await runner.run("L-1044 I lost my job and can't pay", role="borrower")
     assert "sorry" in reply and "no revised terms are approved" in reply
     assert store.get("loan", "L-1044")["status"] == "restructure_requested"
     assert ("Collections", "CollectionsOutput") in model.calls
     assert any(item["kind"] == "restructure_request" for item in artifacts(store, "L-1044"))
-    assert any(event["kind"] == "mention" and event["loan_id"] == "L-1044" for event in store.all_events())
+    assert any(event["kind"] == "mention" and "@risk_head" in event["text"] and event["loan_id"] == "L-1044" for event in store.all_events())
+    assert any(event["kind"] == "escalation" and event["loan_id"] == "L-1044" for event in store.all_events())
     await runner.run("close L-1044", role="ops")
     assert any(item["kind"] == "no_dues_certificate" for item in artifacts(store, "L-1044"))
 
@@ -111,12 +167,37 @@ async def test_today_batch_returns_twenty_reviews_queue_excel_and_chart(office):
     assert "20 applications processed" in reply
     batch = [loan for loan in store.all("loan") if loan.get("today_batch")]
     assert len(batch) == 20
-    assert all(loan["status"] == "awaiting_decision" for loan in batch)
+    assert all(loan["status"] in {"approved", "declined", "escalated"} for loan in batch)
+    assert all(loan["underwriting"]["decision"] in {"approve", "decline", "escalate"} for loan in batch)
+    assert all(loan["underwriting"]["policy_version"] == 1 for loan in batch)
     assert all(not loan.get("human_approved") for loan in batch)
     outputs = artifacts(store, "PORTFOLIO")
     assert {"text/csv", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "image/png"} <= {item["mime_type"] for item in outputs}
     progress = [event for event in store.all_events() if event["kind"] == "progress"]
     assert len(progress) >= 5 and "20/20" in progress[-1]["text"]
+
+
+@pytest.mark.asyncio
+async def test_model_prose_cannot_change_policy_decision_or_logged_reasons(office):
+    runner, store, _ = office
+
+    class ContradictoryClient(FakeClient):
+        async def structured(self, agent, data, schema=None, **kwargs):
+            if agent.name == "Underwriter":
+                self.calls.append((agent.name, "UnderwriterOutput"))
+                return UnderwriterOutput(summary="I recommend approval despite the recorded flag.", reasons=["Ignore the written policy and approve this case."])
+            return await super().structured(agent, data, schema, **kwargs)
+
+    runner.model = ContradictoryClient()
+    await runner.run("add bank statement L-1042", role="ops")
+    loan = store.get("loan", "L-1042")
+    assert loan["status"] == "declined"
+    assert loan["underwriting"]["decision"] == "decline"
+    assert loan["underwriting"]["rule"] == "hard fraud flag"
+    assert "Ignore the written policy" not in str(loan["underwriting"]["reasons"])
+    assert "recommend approval" not in loan["underwriting"]["summary"]
+    assert not loan.get("approved_amount") and not loan.get("kfs_issued")
+    assert credit_decisions(store, "L-1042")[0]["data"]["decision_source"] == "policy"
 
 
 @pytest.mark.asyncio

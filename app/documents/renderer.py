@@ -19,7 +19,7 @@ MIME_TYPES = {
     "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     "png": "image/png", "md": "text/markdown", "chat": "text/markdown",
 }
-QUEUE_COLUMNS = ("loan_id", "name", "requested_amount", "risk_band", "recommendation", "status")
+QUEUE_COLUMNS = ("loan_id", "name", "requested_amount", "risk_band", "decision", "policy_rule", "policy_version", "approval_source", "status", "approved_amount")
 SCHEDULE_COLUMNS = ("installment", "due_date", "emi", "principal", "interest", "balance")
 
 
@@ -43,7 +43,8 @@ def _field(loan: dict, data: dict, key: str) -> Any:
         "payment_amount": ("emi", "amount"), "payment_date": ("paid_at", "date"),
         "consent_purposes": ("consented_to",),
         "consent_by": ("consented_by",), "consent_at": ("consented_at",),
-        "approved_by": ("approved_by_role", "officer"), "payout_account_name": ("payout_name", "account_holder", "payout_account_holder"),
+        "approved_by": ("decision_by", "approved_by_role"), "payout_account_name": ("payout_name", "account_holder", "payout_account_holder"),
+        "approval_source": ("decision_source",), "decision_by": ("approved_by_role",),
         "payout_amount": ("approved_amount",), "payout_at": ("disbursed_at",),
         "outstanding_balance": ("outstanding",), "restructure_status": ("status",),
         "utr": ("simulated_utr",), "decision": ("status",),
@@ -58,6 +59,9 @@ def _field(loan: dict, data: dict, key: str) -> Any:
         risk = data.get("risk", loan.get("risk", {}))
         if "missing_sources" in risk:
             return "Missing: " + ", ".join(risk["missing_sources"]) if risk["missing_sources"] else "All required sources available"
+    if key == "approval_source":
+        underwriting = data.get("underwriting", loan.get("underwriting", {}))
+        return underwriting.get("decision_source")
     if key in {"credit.total_repayment", "credit.total_charges"}:
         principal = _field(loan, data, "approved_amount")
         if key == "credit.total_repayment":
@@ -120,6 +124,25 @@ def _risk_findings(loan: dict, data: dict) -> tuple[dict, list]:
     if explanations and all(isinstance(flag, str) for flag in flags):
         flags = [{"code": code, "explanation": explanations[i] if i < len(explanations) else ""} for i, code in enumerate(flags)]
     return risk, flags
+
+
+def _decision_counts(loans: list[dict]) -> dict[str, int]:
+    counts = {"auto_approved": 0, "auto_declined": 0, "escalated": 0, "risk_head_decided": 0, "not_reviewed": 0}
+    for loan in loans:
+        underwriting = loan.get("underwriting") or {}
+        decision = underwriting.get("decision", loan.get("decision"))
+        source = loan.get("approval_source", loan.get("decision_source", underwriting.get("decision_source")))
+        if loan.get("status") in {"escalated", "restructure_requested"} or decision == "escalate":
+            counts["escalated"] += 1
+        elif source == "policy" and decision in {"approve", "approve_lower", "approved"}:
+            counts["auto_approved"] += 1
+        elif source == "policy" and decision in {"decline", "declined"}:
+            counts["auto_declined"] += 1
+        elif source == "risk_head" and decision in {"approve", "approve_lower", "approved", "decline", "declined"}:
+            counts["risk_head_decided"] += 1
+        else:
+            counts["not_reviewed"] += 1
+    return counts
 
 
 class DocumentService:
@@ -201,11 +224,14 @@ class DocumentService:
             rows = []
             for entry in source:
                 risk = entry.get("risk") or {}
-                credit = entry.get("credit") or {}
+                underwriting = entry.get("underwriting") or {}
                 rows.append([entry.get("loan_id", entry.get("id", "")), entry.get("name", ""),
                              entry.get("requested_amount"), entry.get("risk_band", risk.get("band", "unverified")),
-                             entry.get("recommendation", credit.get("recommendation", "Not reviewed")),
-                             entry.get("status", "Not recorded")])
+                             entry.get("decision", underwriting.get("decision", "Not reviewed")),
+                             entry.get("policy_rule", underwriting.get("rule", "Not evaluated")),
+                             entry.get("policy_version", underwriting.get("policy_version")),
+                             entry.get("approval_source", entry.get("decision_source", underwriting.get("decision_source", "Not decided"))),
+                             entry.get("status", "Not recorded"), entry.get("approved_amount", underwriting.get("approved_amount"))])
             return QUEUE_COLUMNS, rows
         source = data.get("schedule", data.get("rows", loan.get("schedule", [])))
         rows = [[r.get("installment", r.get("month", r.get("number"))), r.get("due_date", r.get("date")),
@@ -234,7 +260,7 @@ class DocumentService:
                  para(f"Applicant: {loan.get('name', 'Portfolio / office record')}", "Label"),
                  Spacer(1, 3 * mm), para(template.introduction)]
         field_rows = [[para(label, "Label"), para(_display(key, _field(loan, data, key)), "Cell")]
-                      for label, key in template.fields]
+                      for label, key in template.fields if key != "override_reason" or _field(loan, data, key)]
         if field_rows:
             table = Table(field_rows, colWidths=[66 * mm, 106 * mm], hAlign="LEFT")
             table.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"),
@@ -243,6 +269,38 @@ class DocumentService:
                                       ("LEFTPADDING", (0, 0), (-1, -1), 10), ("RIGHTPADDING", (0, 0), (-1, -1), 10),
                                       ("TOPPADDING", (0, 0), (-1, -1), 8), ("BOTTOMPADDING", (0, 0), (-1, -1), 8)]))
             story.extend([Spacer(1, 3 * mm), table, Spacer(1, 5 * mm)])
+        if kind == "decision_note":
+            underwriting = data.get("underwriting", loan.get("underwriting")) or {}
+            original = data.get("policy_evaluation", loan.get("policy_evaluation")) or {}
+            story.append(para(f"Policy rule: {_text(underwriting.get('rule'))}", "Label"))
+            snapshot = original.get("inputs", underwriting.get("inputs", {}))
+            story.append(para("Policy input snapshot", "Heading2"))
+            story.append(para("Exact inputs recorded when the policy was applied. Ratios are shown as stored.", "Small"))
+            snapshot_rows = [[para(key, "Label"), para(json.dumps(value, ensure_ascii=False, default=str), "Cell")]
+                             for key, value in snapshot.items()]
+            if snapshot_rows:
+                table = Table(snapshot_rows, colWidths=[66 * mm, 106 * mm], hAlign="LEFT")
+                table.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"),
+                                          ("LINEBELOW", (0, 0), (-1, -1), .4, colors.HexColor("#dbe6e7")),
+                                          ("TOPPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6)]))
+                story.append(table)
+            else:
+                story.append(para("No policy input snapshot recorded. This note is incomplete."))
+            if original and (loan.get("approval_source") == "risk_head" or loan.get("override_reason")):
+                story.append(para("Original policy evaluation", "Heading2"))
+                story.append(para(f"Decision: {_text(original.get('decision'))}. Policy version: {_text(original.get('policy_version'))}. Policy rule: {_text(original.get('rule'))}."))
+                for reason in original.get("reasons", []):
+                    story.append(para(reason))
+            story.append(para("Recorded decision reasons", "Heading2"))
+            for reason in underwriting.get("reasons", []):
+                story.append(para(reason))
+            if not underwriting.get("reasons"):
+                story.append(para("Decision reasons have not been recorded."))
+            approved_terms = loan.get("approved_amount") is not None
+            story.append(para("Approved terms" if approved_terms else "Affordability calculations", "Heading2"))
+            amount_field = ("Amount approved", "approved_amount") if approved_terms else ("Requested amount", "requested_amount")
+            for label, key in (amount_field, ("Eligible amount", "credit.eligible_amount"), ("FOIR at this amount", "credit.foir"), ("Maximum EMI", "credit.max_emi"), ("EMI at this amount", "credit.emi"), ("APR", "credit.apr")):
+                story.append(para(f"{label}: {_display(key, _field(loan, data, key))}", "Small"))
         if kind == "risk_report":
             _, flags = _risk_findings(loan, data)
             story.append(para("Rule findings", "Heading2"))
@@ -272,11 +330,13 @@ class DocumentService:
             else:
                 story.append(para("No rows recorded."))
         for label, value in self._narrative(loan, data):
+            if kind == "decision_note" and label == "Reason":
+                continue
             story.extend([para(label, "Label"), para(value)])
         if kind == "key_facts_statement":
             story.append(para("Cooling-off exit: the borrower may exit during the configured cooling-off period without penalty. Acceptance of this KFS must be recorded before a simulated payout."))
         if kind == "rejection_letter" and not data.get("reasons"):
-            story.append(para("Main reasons have not been recorded. The officer must supply the reasons before sharing this specimen with a borrower."))
+            story.append(para("Main reasons have not been recorded. The decision reasons must be supplied before sharing this specimen with a borrower."))
         def footer(canvas, doc):
             canvas.saveState()
             canvas.setStrokeColor(colors.HexColor("#cbdcde"))
@@ -295,6 +355,7 @@ class DocumentService:
     def _table_file(self, path: Path, kind: str, loan: dict, data: dict, metadata: dict, format: str):
         columns, rows = self._rows(kind, loan, data)
         safe_rows = [[_spreadsheet_safe(v) for v in row] for row in rows]
+        counts = _decision_counts(data.get("rows", data.get("loans", []))) if kind == "review_queue" else {}
         if format == "csv":
             with path.open("w", newline="", encoding="utf-8-sig") as stream:
                 writer = csv.writer(stream)
@@ -303,6 +364,8 @@ class DocumentService:
                 writer.writerow([])
                 for key in ("watermark", "loan_id", "date", "document_id"):
                     writer.writerow([f"# {key}", _spreadsheet_safe(metadata[key])])
+                for key, count in counts.items():
+                    writer.writerow([f"# {key}", count])
             return
         from openpyxl import Workbook
         from openpyxl.styles import Alignment, Font, PatternFill
@@ -310,12 +373,13 @@ class DocumentService:
         workbook = Workbook()
         sheet = workbook.active
         sheet.title = "Review queue"
+        last_column = get_column_letter(len(columns))
         sheet.append(["Lendix Finance - Daily review queue"])
-        sheet.merge_cells("A1:F1")
+        sheet.merge_cells(f"A1:{last_column}1")
         sheet["A1"].font = Font(name="Calibri", size=18, bold=True, color="173B46")
         sheet.row_dimensions[1].height = 32
-        sheet.append([f"As of {metadata['date']} - amounts in INR"])
-        sheet.merge_cells("A2:F2")
+        sheet.append([f"As of {metadata['date']} - amounts in INR. Policy approved: {counts['auto_approved']}; policy declined: {counts['auto_declined']}; escalated: {counts['escalated']}; risk-head decisions: {counts['risk_head_decided']}."])
+        sheet.merge_cells(f"A2:{last_column}2")
         sheet.append([c.replace("_", " ").title() for c in columns])
         for cell in sheet[3]:
             cell.fill = PatternFill("solid", fgColor="173B46")
@@ -324,20 +388,22 @@ class DocumentService:
         sheet.row_dimensions[3].height = 30
         for row in safe_rows:
             sheet.append(row)
-        for cells in sheet.iter_rows(min_row=4, max_row=3 + len(safe_rows), min_col=1, max_col=6):
+        for cells in sheet.iter_rows(min_row=4, max_row=3 + len(safe_rows), min_col=1, max_col=len(columns)):
             for cell in cells:
                 cell.alignment = Alignment(vertical="top", wrap_text=True)
                 cell.font = Font(name="Calibri", size=11, color="263C45")
             cells[2].number_format = '"INR "#,##0.00'
+            cells[9].number_format = '"INR "#,##0.00'
+            sheet.row_dimensions[cells[0].row].height = 32
         sheet.freeze_panes = "A4"
-        sheet.auto_filter.ref = f"A3:F{max(3, 3 + len(rows))}"
-        for index, width in enumerate((18, 30, 24, 18, 30, 25), start=1):
+        sheet.auto_filter.ref = f"A3:{last_column}{max(3, 3 + len(rows))}"
+        for index, width in enumerate((18, 26, 22, 16, 20, 34, 18, 20, 24, 22), start=1):
             sheet.column_dimensions[get_column_letter(index)].width = width
         sheet.append([])
         for key in ("watermark", "loan_id", "date", "document_id"):
             sheet.append([key.replace("_", " ").title(), _spreadsheet_safe(metadata[key])])
             row_index = sheet.max_row
-            sheet.merge_cells(start_row=row_index, start_column=2, end_row=row_index, end_column=6)
+            sheet.merge_cells(start_row=row_index, start_column=2, end_row=row_index, end_column=len(columns))
             sheet.cell(row_index, 2).alignment = Alignment(wrap_text=True)
             sheet.cell(row_index, 1).font = Font(bold=True, color="526870")
         sheet.oddFooter.center.text = WATERMARK
@@ -369,17 +435,10 @@ class DocumentService:
             categories = ["low", "medium", "high", "unverified"]
             axes[0].bar(categories, [bands[k] for k in categories], color=["#2b8b7b", "#d69a40", "#b85762", "#93a9ae"])
             axes[0].set_title("Applications by risk band", loc="left", fontsize=11, pad=15)
-            decisions = {"Approved": 0, "Declined": 0, "Other": 0}
-            for item in loans:
-                status = str(item.get("status", "pending")).lower()
-                if status == "declined":
-                    decisions["Declined"] += 1
-                elif item.get("human_approved") or status in {"approved", "disbursed", "closed", "active", "restructure_requested"}:
-                    decisions["Approved"] += 1
-                else:
-                    decisions["Other"] += 1
-            axes[1].bar(decisions.keys(), decisions.values(), color=["#2b8b7b", "#b85762", "#93a9ae"])
-            axes[1].set_title("Officer decision and lifecycle", loc="left", fontsize=11, pad=15)
+            decisions = _decision_counts(loans)
+            labels = ["Policy\napproved", "Policy\ndeclined", "Escalated", "Risk head\ndecided", "Not\nreviewed"]
+            axes[1].bar(labels, decisions.values(), color=["#2b8b7b", "#b85762", "#d69a40", "#497b9b", "#93a9ae"])
+            axes[1].set_title("Policy outcomes and exceptions", loc="left", fontsize=11, pad=15)
             def paid_amount(item):
                 if "total_paid" in item or "amount_paid" in item:
                     return float(item.get("total_paid", item.get("amount_paid", 0)) or 0)
@@ -396,7 +455,8 @@ class DocumentService:
             axes[2].set_ylim(0, max(1, collected, outstanding) * 1.15)
             if collected == 0 and outstanding == 0:
                 axes[2].text(.5, .5, "No collection amounts recorded", ha="center", va="center", transform=axes[2].transAxes, fontsize=9, wrap=True, color="#526870")
-            figure.text(.06, .13, f"{len(loans)} supplied applications. Missing collection amounts are not included.", fontsize=9, color="#526870")
+            figure.text(.06, .14, f"{len(loans)} applications. Policy approved: {decisions['auto_approved']}. Policy declined: {decisions['auto_declined']}. Escalated: {decisions['escalated']}.", fontsize=9, color="#526870")
+            figure.text(.06, .11, "Escalated includes servicing exceptions. Missing collection amounts are not included.", fontsize=8, color="#526870")
         else:
             ax = figure.subplots()
             axes = [ax]

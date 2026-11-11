@@ -70,7 +70,7 @@ class Store:
         for loan in rows:
             loan["applied_at"] = utcnow().date().isoformat()
             # Fixtures remain fresh on first boot so the demo is reproducible on judging day.
-            days = 12 if loan["id"] == "L-1042" else 400
+            days = 12 if loan["id"] in {"L-1042", "L-1045"} else 400
             loan["phone_activated_at"] = (utcnow() - timedelta(days=days)).date().isoformat()
             self.put("loan", loan["id"], loan)
 

@@ -22,6 +22,8 @@ services:
         sync: false
       - key: OUTPUT_DIR
         sync: false
+      - key: CREDIT_POLICY_PATH
+        sync: false
       - key: ENV
         sync: false
       - key: PUBLIC_BASE_URL

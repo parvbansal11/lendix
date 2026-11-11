@@ -22,7 +22,7 @@ class GeminiClient:
     async def request(self, **kwargs):
         for attempt in range(3):
             if not self.store.reserve_llm_call(self.settings.max_llm_calls_per_day):
-                raise ModelBudgetExceeded("The daily model-call limit has been reached. Existing documents and officer actions remain available; please retry after the daily reset.")
+                raise ModelBudgetExceeded("The daily model-call limit has been reached. Existing documents and risk-head actions remain available; please retry after the daily reset.")
             try:
                 return await self.sdk.aio.models.generate_content(**kwargs)
             except Exception as exc:
@@ -39,8 +39,8 @@ class GeminiClient:
 
     async def structured(self, agent, data, schema=None, *, deep=False, human_message=False):
         schema = schema or agent.output_schema
-        if deep and agent.name != "Credit":
-            raise PermissionError("The deep model is reserved for the credit decision note.")
+        if deep and agent.name != "Underwriter":
+            raise PermissionError("The deep model is reserved for the Underwriter decision note.")
         response = await self.request(
             model=self.settings.model_deep if deep else self.settings.model_fast,
             contents=self.delimit(data),

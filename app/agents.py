@@ -31,6 +31,14 @@ class RiskOutput(BaseModel):
 
 
 class CreditOutput(BaseModel):
+    foir: float | None
+    max_emi: float
+    eligible_amount: float
+    emi: float
+    apr: float
+
+
+class UnderwriterOutput(BaseModel):
     summary: str = Field(max_length=2000)
     reasons: list[str] = Field(max_length=10)
 
@@ -95,10 +103,18 @@ class Risk(Agent):
 
 class Credit(Agent):
     name = "Credit"
-    role = "Write an officer decision note from deterministic affordability and risk facts."
-    instruction = "Recommendations only. Never imply approval. Respect the 50 percent FOIR cap."
-    tools = frozenset({"compute_affordability", "bureau_lookup", "draft_decision_note"})
+    role = "Compute affordability and retrieve synthetic bureau facts for the Underwriter."
+    instruction = "Return deterministic numbers only. The policy engine makes decisions. Respect the 50 percent FOIR cap."
+    tools = frozenset({"compute_affordability", "bureau_lookup"})
     output_schema = CreditOutput
+
+
+class Underwriter(Agent):
+    name = "Underwriter"
+    role = "Apply the lender's written credit policy using deterministic Python, then explain the exact rule that fired."
+    instruction = "The supplied policy decision, rule, version and inputs are immutable. The model writes only the summary. It cannot approve, decline or change policy. Human exceptions belong to the risk head."
+    tools = frozenset({"apply_policy", "draft_decision_note", "escalate"})
+    output_schema = UnderwriterOutput
 
 
 class Compliance(Agent):
@@ -110,14 +126,14 @@ class Compliance(Agent):
 
 class Disbursement(Agent):
     name = "Disbursement"
-    role = "Issue terms after human approval; simulate payout only after accepted KFS and all checks."
+    role = "Issue terms after policy or risk-head approval; simulate payout only after accepted KFS and all checks."
     tools = frozenset({"make_kfs", "simulate_payout"})
     output_schema = DisbursementOutput
 
 
 class Collections(Agent):
     name = "Collections"
-    role = "Maintain schedules and receipts; handle hardship with empathy and officer review."
+    role = "Maintain schedules and receipts; handle hardship with empathy and escalate to the risk head."
     instruction = "No threats, third-party contacts or contact outside 08:00–19:00 IST."
     tools = frozenset({"emi_schedule", "record_payment", "draft_reminder", "request_restructure"})
     output_schema = CollectionsOutput
@@ -130,4 +146,4 @@ class Reporter(Agent):
     output_schema = ReporterOutput
 
 
-AGENTS = {a.name: a() for a in (FrontDesk, Intake, Risk, Credit, Compliance, Disbursement, Collections, Reporter)}
+AGENTS = {a.name: a() for a in (FrontDesk, Intake, Risk, Credit, Underwriter, Compliance, Disbursement, Collections, Reporter)}

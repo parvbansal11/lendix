@@ -117,7 +117,7 @@ def test_affordability_emi_and_fee_inclusive_apr():
     result = compute_affordability(loan)
     assert result["emi"] == 9984.82
     assert result["max_emi"] == 20000
-    assert result["recommendation"] == "approve"
+    assert result["recommendation"] == "affordable"
     assert result["apr"] > result["annual_rate"]
     assert result["total_cost"] == round(loan["requested_amount"] + result["total_interest"] + loan["fees"], 2)
     assert compute_affordability(dict(loan, fees=0))["apr"] == .18
@@ -126,17 +126,19 @@ def test_affordability_emi_and_fee_inclusive_apr():
 def test_affordability_uses_lower_verified_income_and_preserves_cap():
     result = compute_affordability(dict(clean_loan(), statement_income=20000))
     assert result["max_emi"] == 5000
-    assert result["recommendation"] == "approve_lower"
+    assert result["recommendation"] == "lower_amount_affordable"
     assert 0 < result["recommended_amount"] < 200000
     modified = dict(clean_loan(), statement_income=20000, requested_amount=result["recommended_amount"])
     assert compute_affordability(modified)["foir"] <= .5
 
 
 @pytest.mark.parametrize("band", ["high", "unverified"])
-def test_credit_never_recommends_unresolved_identity(band):
+def test_credit_calculations_do_not_make_risk_decisions(band):
     result = compute_affordability(dict(clean_loan(), risk={"band": band}))
-    assert result["recommendation"] == "decline"
-    assert result["recommended_amount"] == 0
+    clean_result = compute_affordability(clean_loan())
+    assert result == clean_result
+    assert result["recommendation"] == "affordable"
+    assert result["recommended_amount"] == 200000
 
 
 def test_zero_interest_and_schedule_month_end_rounding():
@@ -170,5 +172,10 @@ def test_seed_includes_hero_clean_hardship_and_twenty_today_batch():
     hero["documents"].append("bank_statement")
     assert {"PAYOUT_NAME_MISMATCH", "NEW_NUMBER"} <= set(run_risk_checks(hero, loans, TODAY)["codes"])
     assert run_risk_checks(by_id["L-1043"], loans, TODAY)["band"] == "low"
+    assert by_id["L-1043"]["requested_amount"] == 100000
+    assert compute_affordability(hero)["foir"] == .38
+    assert by_id["L-1045"]["requested_amount"] == 300000
+    assert run_risk_checks(by_id["L-1045"], loans, TODAY)["band"] == "medium"
+    assert compute_affordability(by_id["L-1045"])["eligible_amount"] >= 200000
     assert by_id["L-1044"]["status"] == "disbursed"
     assert sum(loan["today_batch"] for loan in loans) == 20
