@@ -145,6 +145,10 @@ def create_app(settings=None, model=None):
     async def workspace():
         return FileResponse(ROOT / "static/index.html")
 
+    @app.get("/office")
+    async def live_office():
+        return FileResponse(ROOT / "static/world.html")
+
     @app.get("/healthz")
     async def health():
         return {"status": "ok", "data": "synthetic", "nonilion": "not_connected"}

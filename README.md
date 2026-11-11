@@ -164,7 +164,9 @@ Set the key and available model IDs in `.env`, then run:
 .venv/bin/python scripts/demo_run.py --mock
 ```
 
-Open `http://127.0.0.1:8000`. The script loads `.env` without replacing existing environment settings and writes an isolated database, event log and documents under `out/demo/`.
+Open `http://127.0.0.1:8000` directly into the lending workspace (`/app` is an alias). Choose a demo role in the header; this is not authentication. `/office` shows the live pixel-art office, and `/office?tour=1` follows each handoff with the corresponding agent sheet. Fonts and assets are self-hosted; the pages need no CDN or build step.
+
+The rehearsal script loads `.env` without replacing existing environment settings and writes an isolated database, event log and documents under `out/demo/`.
 
 The official [`google-genai` SDK](https://ai.google.dev/gemini-api/docs/libraries) uses [structured outputs](https://ai.google.dev/gemini-api/docs/structured-output) and bounded [function calling](https://ai.google.dev/gemini-api/docs/function-calling). A normal review uses about four model calls. Only the Underwriter's explanatory note uses the deep model. Transient failures retry up to three times and are reported visibly.
 

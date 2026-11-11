@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#F6F5F1"><link rel="icon" type="image/svg+xml" href="/static/favicon.svg"><title>Lendix · Live office</title><link rel="stylesheet" href="/static/design.css"><link rel="stylesheet" href="/static/world.css"><script src="/static/world.js" defer></script></head>
+<body>
+<a class="skip-link" href="#dock">Skip to office command</a>
+<header class="site-header top office-header"><div class="office-brand"><a class="wordmark" href="/">Lendix.</a><span class="office-page-label">Live office</span></div><nav class="header-nav" aria-label="Office navigation"><span class="quiet-notice office-notice">Synthetic demo data</span><span class="mono office-connection" id="office-connection">Connecting</span><a href="/app">Back to workspace <span aria-hidden="true">→</span></a><button id="sheet-toggle" type="button" class="office-toggle" aria-controls="sheet" aria-expanded="false">Show agent sheet</button></nav></header>
+<div class="ticker" id="ticker" role="status"><em>Office</em>Waiting for the first application</div>
+<div id="stage-wrap"><div id="stage" aria-label="Live pixel-art lending office. Each agent opens a work sheet."><div class="floor"></div></div></div>
+<div class="office-controls"><label class="agent-picker-label">Inspect an agent<select id="agent-picker"><option value="">Choose a desk</option></select></label><span class="quiet-notice">Nine specialists. One person on call.</span></div>
+<div class="quick" id="quick" aria-label="Demo commands"></div>
+<form class="dock" id="dock"><label for="role" class="sr-only">Demo role</label><select id="role"><option value="borrower">Borrower</option><option value="ops" selected>Operations</option><option value="risk_head">Risk head</option></select><label class="sr-only" for="msg">Ask the office</label><input id="msg" autocomplete="off" maxlength="8000" placeholder="Ask the office… e.g. review L-1042" required><button type="submit">Send <span aria-hidden="true">→</span></button></form>
+<div class="hint">Select a desk to inspect the record</div>
+<aside class="sheet" id="sheet" aria-labelledby="s-name" inert><header><div class="av" id="s-av" aria-hidden="true"></div><div><h2 id="s-name">Agent work sheet</h2><div class="role" id="s-role"></div></div><button class="close" id="s-close" aria-label="Close agent sheet">Close</button></header><div class="sheet-content"><section><h3>Working on</h3><div class="now" id="s-now">Ready at its desk.</div></section><section id="s-case-wrap" hidden><h3 id="s-case-h">This case</h3><div class="case" id="s-case"></div></section><section><h3>Tools it may use</h3><div class="tools" id="s-tools"></div></section><section id="s-extra-wrap" hidden><h3 id="s-extra-h"></h3><div class="policy" id="s-extra"></div></section><div class="log" id="s-log"></div></div></aside>
+</body>
+</html>
