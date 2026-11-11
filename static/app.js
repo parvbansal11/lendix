@@ -17,6 +17,7 @@
   let selected = params.get("loan") || storage.get("lendix.loan") || "L-1042";
   let state = { loans: [], documents: [] };
   let filter = "all", search = "", posting = false, refreshTimer, renderTimer, toastTimer, refreshing;
+  let queueLimit = 4, activityExpanded = false;
   let eventLoan = null, source;
   const notes = new Map(), work = new Map(), jobs = new Map(), completedJobs = new Set(), seenEvents = new Set(), events = [];
   const openDetails = new Set();
@@ -89,40 +90,66 @@
     }).sort((a, b) => Number(needsPerson(b)) - Number(needsPerson(a)) || a.id.localeCompare(b.id));
     const list = $("queue-list"); list.replaceChildren();
     if (!matches.length) list.append(node("p", "queue-empty", "No applications match. Try another name or filter."));
-    for (const item of matches) {
+    const visible = matches.slice(0, queueLimit);
+    const current = matches.find((item) => item.id === selected);
+    if (current && !visible.includes(current) && visible.length) visible[visible.length - 1] = current;
+    for (const item of visible) {
       const row = button("", () => selectLoan(item.id), "queue-row" + (item.id === selected ? " selected" : ""));
       row.id = `queue-${item.id}`; row.setAttribute("aria-current", item.id === selected ? "true" : "false");
       row.setAttribute("aria-label", `${item.id}, ${item.name}, ${money(item.requested_amount)}, ${statusWords[item.status] || words(item.status)}`);
       const top = node("span", "queue-row-top"); const id = node("span", "mono", item.id); top.append(id);
       if (needsPerson(item)) { const dot = node("span", "needs-dot"); dot.setAttribute("aria-hidden", "true"); top.append(dot); }
-      const bottom = node("span", "queue-row-bottom"); bottom.append(node("span", "queue-row-stage", stages[stageOf(item)]), pill(statusWords[item.status] || words(item.status), statusTone(item)));
+      top.append(node("span", "queue-row-stage", stages[stageOf(item)]));
+      const bottom = node("span", "queue-row-bottom"); bottom.append(pill(statusWords[item.status] || words(item.status), statusTone(item)));
       row.append(top, node("span", "queue-row-name", item.name), node("span", "queue-row-amount", money(item.approved_amount || item.requested_amount)), bottom); list.append(row);
     }
+    if (matches.length > visible.length) list.append(button(`Show ${Math.min(4, matches.length - visible.length)} more · ${matches.length - visible.length} remaining`, () => { queueLimit += 4; renderQueue(); }, "text-button queue-more"));
+    if (queueLimit > 4) list.append(button("Show fewer applications", () => { queueLimit = 4; renderQueue(); }, "text-button queue-more"));
     if (focusId?.startsWith("queue-") && $(focusId)) $(focusId).focus({ preventScroll: true });
   }
   function selectLoan(id) {
     if (!state.loans.some((item) => item.id === id)) return;
-    selected = id; storage.set("lendix.loan", id);
+    selected = id; activityExpanded = false; openDetails.delete("progress"); storage.set("lendix.loan", id);
     const url = new URL(location.href); url.searchParams.set("loan", id); history.replaceState(null, "", url.pathname + url.search);
     $("loan-queue").classList.remove("open"); $("queue-toggle").setAttribute("aria-expanded", "false");
     renderQueue(); renderLoan(); renderActivity(); $("loan-view").scrollTop = 0;
+    window.scrollTo({ top: 0, behavior: "instant" });
   }
   function section(id, title, label) { const wrap = node("section", "case-content-section"); wrap.id = id; const heading = node("div", "case-section-heading"); heading.append(node("h2", "", title)); if (label) heading.append(node("span", "mono", label)); wrap.append(heading); return wrap; }
   function detailPair(label, value, className = "") { const pair = node("div", className); pair.append(node("dt", "", label), node("dd", "", value)); return pair; }
   function renderRail(item) {
+    const control = node("details", "progress-control"); control.id = "office-progress";
+    control.open = openDetails.has("progress");
+    control.addEventListener("toggle", () => { if (control.open) openDetails.add("progress"); else openDetails.delete("progress"); });
     const rail = node("ol", "lifecycle"); rail.setAttribute("aria-label", "Loan lifecycle");
     const currentWork = work.get(item.id), stage = currentWork?.active ? currentWork.stage : stageOf(item);
+    const summary = node("summary", "progress-summary"); summary.id = "progress-summary";
+    const label = currentWork?.active ? `${currentWork.agent || stages[stage]} is working` : `${String(stage + 1).padStart(2, "0")} ${stages[stage]}`;
+    summary.append(node("span", "progress-label", label));
+    const segments = node("span", "progress-segments"); segments.setAttribute("aria-hidden", "true");
+    stages.forEach((_, index) => segments.append(node("span", index < stage ? "done" : index === stage ? "current" : "")));
+    summary.append(segments, node("span", "progress-count", `${item.status === "closed" ? 9 : stage}/9 complete`), node("span", "progress-chevron", "⌄"));
+    control.append(summary, rail);
     stages.forEach((name, index) => {
       const li = node("li", index < stage ? "done" : index === stage ? "current" + (currentWork?.active ? " working" : "") : "");
       const action = button("", () => {
         const target = $(stageTargets[index]);
         if (!target) { toast(`${name} has not started for this loan.`); return; }
         if (target.tagName === "DETAILS") target.open = true;
+        const parentRecord = target.closest("details.record-disclosure"); if (parentRecord) parentRecord.open = true;
+        control.open = false; openDetails.delete("progress");
         target.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth", block: "start" });
       }, ""); action.id = `step-${index}`; action.disabled = index > stage; action.setAttribute("aria-label", `${index + 1}. ${name}${index < stage ? ", complete" : index === stage ? ", current" : ", not started"}`);
       if (index === stage) action.setAttribute("aria-current", "step");
       action.append(node("span", "step-number", index < stage ? "✓" : String(index + 1).padStart(2, "0")), node("span", "step-name", name)); li.append(action); rail.append(li);
-    }); return rail;
+    }); return control;
+  }
+  function disclosure(id, title, caption, children) {
+    const key = `${selected}:${id}`, wrap = node("details", "record-disclosure"); wrap.id = id; wrap.open = openDetails.has(key);
+    const summary = node("summary"); summary.append(node("span", "", title), node("span", "disclosure-caption", caption), node("span", "disclosure-chevron", "+"));
+    wrap.append(summary, ...children);
+    wrap.addEventListener("toggle", () => { if (wrap.open) openDetails.add(key); else openDetails.delete(key); });
+    return wrap;
   }
   function findLink(item, kind, label) { const file = docsFor(item.id).find((doc) => doc.kind === kind); if (!file || !safeUrl(file.url)) return null; const link = node("a", "", label || docNames[kind] || words(kind)); link.href = safeUrl(file.url); link.target = "_blank"; link.rel = "noopener noreferrer"; return link; }
   function renderFindings(item) {
@@ -136,14 +163,17 @@
       const clear = node("div", "clear-finding"); const mark = node("span", "clear-mark", "✓"); mark.setAttribute("aria-hidden", "true"); const copy = node("div"); copy.append(node("h3", "", "Nothing unusual found"), node("p", "", "The available verification records passed the configured risk checks.")); clear.append(mark, copy); wrap.append(clear); return wrap;
     }
     const findings = [...codes]; if (risk.band === "unverified") findings.push("SOURCE_UNAVAILABLE");
-    for (const code of findings) {
+    for (const [index, code] of findings.entries()) {
       const info = findingInfo(item, code), card = node("article", "finding-card");
       const copy = node("div"); copy.append(node("span", "severity", info.severity), node("h3", "finding-title", info.sentence));
       const origin = node("p", "finding-source", `Risk rule ${code} · ${info.source}`);
       const link = findLink(item, info.kind, "Open the verification document ↗"); if (link) origin.append(link); copy.append(origin);
       const paper = node("div", "field-evidence"); paper.append(node("span", "mono", info.source));
       info.fields.forEach(([label, value, flagged]) => { const pair = detailPair(label, value, "evidence-pair"); if (flagged) pair.lastChild.classList.add("flagged"); paper.append(pair); });
-      paper.append(node("p", "evidence-caption", "Recorded fields from the synthetic application and fixtures.")); card.append(copy, paper); wrap.append(card);
+      paper.append(node("p", "evidence-caption", "Recorded fields from the synthetic application and fixtures.")); card.append(copy);
+      if (index === 0) card.append(paper);
+      else { const evidence = node("details", "finding-evidence"), key = `${item.id}:evidence:${code}`; evidence.open = openDetails.has(key); evidence.append(node("summary", "", "View source fields"), paper); evidence.addEventListener("toggle", () => { if (evidence.open) openDetails.add(key); else openDetails.delete(key); }); card.append(evidence); }
+      wrap.append(card);
     }
     return wrap;
   }
@@ -163,7 +193,7 @@
     const decision = item.servicing_escalation || item.underwriting; if (!decision) return null;
     const wrap = section("decision", item.servicing_escalation ? "Hardship review" : "The decision", "On record"); const layout = node("div", "decision-layout"), left = node("div");
     left.append(node("div", "decision-word " + (decision.decision === "decline" ? "amber" : ["approve", "approve_lower"].includes(decision.decision) ? "green" : ""), outcomes[decision.decision] || words(decision.decision)), node("div", "policy-rule", `Policy rule / ${decision.rule || "Not recorded"}`));
-    const right = node("div", "decision-reasons"); const reasons = [...new Set(decision.reasons || item.rejection_reasons || [])]; reasons.slice(0, 3).forEach((reason) => right.append(node("p", "", reason)));
+    const right = node("div", "decision-reasons"); const reasons = [...new Set(decision.reasons || item.rejection_reasons || [])].filter((reason) => reason !== item.override_reason); reasons.slice(0, 3).forEach((reason) => right.append(node("p", "", reason)));
     if (item.approved_amount && !item.servicing_escalation) right.prepend(node("p", "", `${money(item.approved_amount)} approved${item.approved_amount < item.requested_amount ? ` against ${money(item.requested_amount)} requested` : ""}.`));
     const attribution = node("div", "decision-attribution"); const who = item.approval_source === "risk_head" && !item.servicing_escalation ? "Risk head, with reason on record" : `Underwriter, by policy v${decision.policy_version || "—"}`; attribution.append(node("strong", "", who)); if (item.override_reason && !item.servicing_escalation) attribution.append(node("p", "", item.override_reason)); right.append(attribution); layout.append(left, right); wrap.append(layout); return wrap;
   }
@@ -185,7 +215,7 @@
         const copy = node("div"), extension = String(file.filename || "").split(".").pop().toUpperCase(); copy.append(node("div", "document-name", (file.kind === "risk_report" && extension === "PNG") ? "Risk chart" : docNames[file.kind] || words(file.kind))); const meta = node("div", "document-metadata"); meta.append(node("span", "", extension), node("time", "", time(file.created_at))); copy.append(meta); const action = node("span", "document-download", "Open"); action.append(node("span", "", "↗")); link.append(copy, action); group.append(link); }); wrap.append(group);
     });
     if (["new", "pending", "received", "awaiting_documents"].includes(item.status)) { const upload = button("Upload a document", () => $("upload-input").click(), "text-button"); wrap.append(upload); }
-    return wrap;
+    return disclosure("document-records", "Documents", `${files.length} on file`, [wrap]);
   }
   function renderApplication(item) {
     const wrap = node("details", "application-record"); wrap.id = "application"; wrap.open = openDetails.has("application"); wrap.addEventListener("toggle", () => { if (wrap.open) openDetails.add("application"); else openDetails.delete("application"); }); wrap.append(node("summary", "", "Application record")); const grid = node("dl", "application-grid");
@@ -206,24 +236,29 @@
     }
     return sections;
   }
-  function renderNote(item) { const note = notes.get(item.id); if (!note) return null; const wrap = node("aside", "inline-note" + (note.error ? " error" : "")); wrap.setAttribute("aria-label", "Latest office reply"); wrap.append(node("span", "mono", note.error ? "The office / Needs attention" : "The office / Latest update"), node("p", "", note.text)); if (note.error && note.retry) wrap.append(button("Retry", () => sendCommand(note.retry, item.id, note.role || role), "text-button")); return wrap; }
+  function renderNote(item) { const note = notes.get(item.id); if (!note) return null; const wrap = node("aside", "inline-note" + (note.error ? " error" : "")); wrap.setAttribute("aria-label", "Latest office reply"); wrap.append(node("p", "", note.text)); if (note.error && note.retry) wrap.append(button("Retry", () => sendCommand(note.retry, item.id, note.role || role), "text-button")); if (note.error) return wrap; return disclosure("office-reply", "Office reply", "Read the latest update", [wrap]); }
   function renderLoan() {
     const item = loan(), root = $("loan-content"); if (!item) return;
     const focusId = document.activeElement?.id;
     root.replaceChildren();
-    const header = node("section", "case-header"), top = node("div", "case-header-top"); top.append(node("span", "case-id", `${item.id} / Loan application`), pill(statusWords[item.status] || words(item.status), statusTone(item)));
+    const header = node("section", "case-header"), top = node("div", "case-header-top"), identity = node("div", "case-identity");
+    identity.append(renderRail(item), node("span", "case-id", `${item.id} / Loan application`)); top.append(identity, pill(statusWords[item.status] || words(item.status), statusTone(item)));
     const heading = node("div", "case-heading-row"), name = node("div"); name.append(node("h1", "", item.name)); heading.append(name); const action = primaryAction(item);
     if (action) { const actions = node("div", "case-action"), primary = button(action.label, () => { if (action.decide) openDecision(item); else if (action.terms) openTerms(item); else if (action.upload) $("upload-input").click(); else sendCommand(action.message, item.id); }); primary.id = "primary-action"; primary.disabled = !!work.get(item.id)?.active; actions.append(primary); heading.append(actions); }
     const meta = node("div", "case-meta"); meta.append(node("span", "amount", money(item.approved_amount || item.requested_amount)), node("span", "separator"), node("span", "", `${item.tenure_months} months`)); if (item.risk?.band || item.risk_band) meta.append(node("span", "separator"), node("span", "", `${words(item.risk?.band || item.risk_band)} risk`));
     const status = node("div", "case-status-line"); status.setAttribute("role", "status"); if (work.get(item.id)?.active) { const mark = node("span", "working-mark"); mark.setAttribute("aria-hidden", "true"); status.append(mark); } status.append(document.createTextNode(calmStatus(item)));
-    header.append(top, heading, meta, status); root.append(header, renderRail(item)); if (item.status === "declined") root.append(node("p", "stage-caption", "This application ends at the decision. No payout was made."));
-    root.append(renderFindings(item)); const decision = renderDecision(item); if (decision) root.append(decision);
-    const note = renderNote(item); if (note) root.append(note);
-    const numbers = renderMoney(item); if (numbers) root.append(numbers);
-    renderServicing(item).forEach((element) => root.append(element)); root.append(renderDocuments(item), renderApplication(item));
+    header.append(top, heading, meta, status); root.append(header);
+    const overview = node("div", "loan-overview"), findings = renderFindings(item); overview.append(findings);
+    if (!item.risk && ["disbursed", "restructure_requested"].includes(item.status)) findings.classList.add("seeded-record");
+    const facts = node("div", "loan-facts"), decision = renderDecision(item), numbers = renderMoney(item);
+    if (decision) facts.append(decision); if (numbers) facts.append(numbers); if (facts.childNodes.length) overview.append(facts); else overview.classList.add("no-decision");
+    root.append(overview);
+    const records = node("div", "loan-records"), note = renderNote(item); if (note) records.append(note);
+    const servicing = renderServicing(item); if (servicing.length) records.append(disclosure("servicing-records", "Payout and repayments", item.status === "closed" ? `${item.paid_installments || 0} installments complete` : "Safeguards and records", servicing));
+    records.append(renderDocuments(item), renderApplication(item)); root.append(records);
     $("command-input").placeholder = `Review ${item.id}`;
     renderSuggestions(item);
-    if (focusId && $(focusId) && ["primary-action", ...stages.map((_, index) => `step-${index}`)].includes(focusId)) $(focusId).focus({ preventScroll: true });
+    if (focusId && $(focusId) && ["primary-action", "progress-summary", ...stages.map((_, index) => `step-${index}`)].includes(focusId)) $(focusId).focus({ preventScroll: true });
   }
   function renderSuggestions(item) {
     const root = $("command-suggestions"); root.replaceChildren(); const suggestions = [];
@@ -248,6 +283,7 @@
   function relative(value) { const seconds = Math.max(0, Math.round((Date.now() - new Date(value).getTime()) / 1000)); if (!Number.isFinite(seconds)) return ""; return seconds < 60 ? `${seconds} s ago` : seconds < 3600 ? `${Math.floor(seconds / 60)} min ago` : time(value); }
   function renderActivity() {
     const list = $("activity-list"), groups = []; const relevant = events.filter((event) => event._loan === selected || (!event._loan && ["progress", "error"].includes(event.kind))).filter((event) => !["status", "reply", "file", "office_action"].includes(event.kind));
+    $("activity-panel").classList.toggle("expanded-record", activityExpanded);
     const checks = new Map();
     relevant.forEach((event) => {
       if (event.kind === "tool") { const key = event.agent; if (checks.has(key)) checks.get(key).events.push(event); else { const group = { agent: key, type: "checks", events: [event] }; checks.set(key, group); groups.push(group); } }
@@ -256,7 +292,8 @@
     groups.sort((a, b) => Number(b.events[b.events.length - 1].id) - Number(a.events[a.events.length - 1].id));
     const expanded = new Set(Array.from(list.querySelectorAll("details[open]")).map((element) => element.dataset.group)); list.replaceChildren();
     if (!groups.length) list.append(node("p", "activity-empty", "When this application moves, each handoff and completed check appears here."));
-    groups.slice(0, 14).forEach((group) => { const detail = node("details", "activity-entry"), last = group.events[group.events.length - 1], key = `${group.agent}-${group.type}-${group.type === "checks" ? "" : last.id}`; detail.dataset.group = key; detail.open = expanded.has(key); const summary = node("summary"); summary.append(node("span", "activity-entry-title", activityTitle(group))); const timestamp = node("time", "", relative(last.timestamp)); timestamp.dateTime = last.timestamp; timestamp.dataset.timestamp = last.timestamp; summary.append(timestamp, node("span", "activity-expand", "Expand record")); const technical = node("ol", "activity-technical"); group.events.slice(-12).forEach((event) => technical.append(node("li", "", `${time(event.timestamp)} · ${event.agent} · ${event.text}`))); detail.append(summary, technical); list.append(detail); });
+    groups.slice(0, activityExpanded ? 14 : 4).forEach((group) => { const detail = node("details", "activity-entry"), last = group.events[group.events.length - 1], key = `${group.agent}-${group.type}-${group.type === "checks" ? "" : last.id}`; detail.dataset.group = key; detail.open = expanded.has(key); const summary = node("summary"); summary.append(node("span", "activity-entry-title", activityTitle(group))); const timestamp = node("time", "", relative(last.timestamp)); timestamp.dateTime = last.timestamp; timestamp.dataset.timestamp = last.timestamp; summary.append(timestamp, node("span", "activity-expand", "Expand record")); const technical = node("ol", "activity-technical"); group.events.slice(-12).forEach((event) => technical.append(node("li", "", `${time(event.timestamp)} · ${event.agent} · ${event.text}`))); detail.append(summary, technical); list.append(detail); });
+    if (groups.length > 4) list.append(button(activityExpanded ? "Show recent activity" : `Show earlier activity · ${groups.length - 4}`, () => { activityExpanded = !activityExpanded; renderActivity(); }, "text-button activity-more"));
   }
   function renderSoon() { clearTimeout(renderTimer); renderTimer = setTimeout(() => { renderQueue(); renderLoan(); renderActivity(); }, 100); }
   async function responseData(response) { let data; try { data = await response.json(); } catch (_) { data = {}; } if (!response.ok) { const detail = Array.isArray(data.detail) ? data.detail.map((item) => item.msg).join("; ") : data.detail; throw new Error(typeof detail === "string" ? detail : "The office could not complete this request. Please retry."); } return data; }
@@ -306,8 +343,8 @@
   $("terms-accept").addEventListener("click", () => { if (!$("terms-confirm").checked) return; const id = $("terms-dialog").dataset.loan; $("terms-dialog").close(); sendCommand(`accept KFS ${id}`, id); });
   document.querySelectorAll("[data-close-dialog]").forEach((element) => element.addEventListener("click", () => $(element.dataset.closeDialog).close()));
   $("role-select").addEventListener("change", (event) => { role = event.target.value; storage.set("lendix.role", role); renderLoan(); });
-  $("loan-search").addEventListener("input", (event) => { search = event.target.value; renderQueue(); });
-  $("queue-filters").addEventListener("click", (event) => { const target = event.target.closest("[data-filter]"); if (!target) return; filter = target.dataset.filter; document.querySelectorAll("[data-filter]").forEach((element) => { element.classList.toggle("active", element === target); element.setAttribute("aria-pressed", String(element === target)); }); renderQueue(); });
+  $("loan-search").addEventListener("input", (event) => { search = event.target.value; queueLimit = 4; renderQueue(); });
+  $("queue-filters").addEventListener("click", (event) => { const target = event.target.closest("[data-filter]"); if (!target) return; filter = target.dataset.filter; queueLimit = 4; document.querySelectorAll("[data-filter]").forEach((element) => { element.classList.toggle("active", element === target); element.setAttribute("aria-pressed", String(element === target)); }); renderQueue(); });
   $("command-form").addEventListener("submit", (event) => { event.preventDefault(); const text = $("command-input").value.trim(); if (!text || posting) return; $("command-input").value = ""; sendCommand(text); });
   $("batch-button").addEventListener("click", () => { if (role === "borrower") { toast("Choose Operations or Risk head to review the portfolio."); return; } sendCommand("Review today's 20 applications"); });
   $("upload-input").addEventListener("change", async (event) => { const file = event.target.files[0], item = loan(); if (!file || !item) return; if (file.size > 5 * 1024 * 1024) { toast("Choose a document of 5 MB or smaller."); event.target.value = ""; return; } const form = new FormData(); form.append("file", file); form.append("loan_id", item.id); form.append("role", role); form.append("conversation_id", "office"); try { const result = await responseData(await fetch("/api/upload", { method: "POST", body: form })); if (!completedJobs.has(result.job_id)) { jobs.set(result.job_id, { loanId: item.id, retry: `review ${item.id}`, role }); work.set(item.id, { active: true, agent: "Intake", stage: 1, jobId: result.job_id }); setTimeout(() => pollJob(result.job_id), 1000); } toast("Document received for review."); renderSoon(); } catch (error) { notes.set(item.id, { text: error.message, error: true }); renderSoon(); } finally { event.target.value = ""; } });
@@ -316,7 +353,7 @@
   $("queue-close").addEventListener("click", () => { togglePanel("loan-queue", "queue-toggle", false); $("queue-toggle").focus(); });
   $("activity-toggle").addEventListener("click", () => togglePanel("activity-panel", "activity-toggle", !$("activity-panel").classList.contains("open")));
   $("activity-close").addEventListener("click", () => { togglePanel("activity-panel", "activity-toggle", false); $("activity-toggle").focus(); });
-  document.addEventListener("keydown", (event) => { if (event.key === "Escape") { if ($("loan-queue").classList.contains("open")) { togglePanel("loan-queue", "queue-toggle", false); $("queue-toggle").focus(); } if ($("activity-panel").classList.contains("open")) { togglePanel("activity-panel", "activity-toggle", false); $("activity-toggle").focus(); } } });
+  document.addEventListener("keydown", (event) => { if (event.key === "Escape") { const progress = $("office-progress"); if (progress?.open) { progress.open = false; openDetails.delete("progress"); $("progress-summary").focus(); } if ($("loan-queue").classList.contains("open")) { togglePanel("loan-queue", "queue-toggle", false); $("queue-toggle").focus(); } if ($("activity-panel").classList.contains("open")) { togglePanel("activity-panel", "activity-toggle", false); $("activity-toggle").focus(); } } });
   setInterval(() => document.querySelectorAll("time[data-timestamp]").forEach((element) => { element.textContent = relative(element.dataset.timestamp); }), 15000);
   window.addEventListener("pagehide", () => source?.close());
   window.addEventListener("pageshow", (event) => { if (event.persisted) connectEvents(); });
