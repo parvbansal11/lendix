@@ -141,6 +141,10 @@ def create_app(settings=None, model=None):
     async def home():
         return FileResponse(ROOT / "static/index.html")
 
+    @app.get("/app")
+    async def workspace():
+        return FileResponse(ROOT / "static/index.html")
+
     @app.get("/healthz")
     async def health():
         return {"status": "ok", "data": "synthetic", "nonilion": "not_connected"}

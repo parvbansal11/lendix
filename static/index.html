@@ -1,131 +1,23 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#152d33">
-    <meta name="description" content="Lendix Finance — a synthetic lending office run by AI agents, end to end.">
-    <title>Lendix Finance · Lending office</title>
-    <link rel="stylesheet" href="/static/styles.css">
-    <script src="/static/app.js" defer></script>
-  </head>
-  <body>
-    <svg xmlns="http://www.w3.org/2000/svg" class="svg-library" aria-hidden="true">
-      <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
-      <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 4v16h17M8 15v-4m5 4V6m5 9v-6"/></symbol>
-      <symbol id="i-list" viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11M3 6h1m-1 6h1m-1 6h1"/></symbol>
-      <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></symbol>
-      <symbol id="i-send" viewBox="0 0 24 24"><path d="m21 3-7 18-4-7-7-4L21 3ZM10 14 21 3"/></symbol>
-      <symbol id="i-paperclip" viewBox="0 0 24 24"><path d="m8 13 6-6a3 3 0 0 1 4 4l-8 8a5 5 0 0 1-7-7l9-9a7 7 0 0 1 10 10l-9 9" transform="translate(0 -1) scale(.9)"/></symbol>
-      <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9l-6-6ZM14 3v6h6M8 13h8m-8 4h5"/></symbol>
-      <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 16v4h16v-4"/></symbol>
-      <symbol id="i-shield" viewBox="0 0 24 24"><path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6l8-3Z"/><path d="m8 12 3 3 5-6"/></symbol>
-      <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
-      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
-    </svg>
-    <a class="skip-link" href="#message-input">Skip to conversation</a>
-    <div class="app-shell">
-      <aside class="sidebar" aria-label="Workspace navigation">
-        <a class="brand" href="/" aria-label="Lendix Finance home">
-          <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span>
-          <span class="brand-name">lendix<span>FINANCE</span></span>
-        </a>
-        <div class="sidebar-section-label">YOUR WORKSPACE</div>
-        <nav class="primary-nav" aria-label="Main navigation">
-          <a href="#workspace" class="nav-item active" aria-current="page"><svg class="icon"><use href="#i-grid"></use></svg><span>Lending desk</span><span class="nav-dot" aria-hidden="true"></span></a>
-          <button class="nav-item" type="button" data-command="review queue"><svg class="icon"><use href="#i-list"></use></svg><span>Review queue</span><span class="nav-count" id="queue-count">—</span></button>
-          <button class="nav-item" type="button" data-command="dashboard"><svg class="icon"><use href="#i-chart"></use></svg><span>Portfolio report</span></button>
-        </nav>
-        <div class="sidebar-section-label scenarios-label">DEMO SCENARIOS</div>
-        <div class="scenario-list">
-          <button type="button" class="scenario-button selected" data-select-loan="L-1042"><span class="scenario-number">01</span><span>Mismatched details<small>L-1042 · Review & decision</small></span><span class="scenario-indicator" aria-hidden="true"></span></button>
-          <button type="button" class="scenario-button" data-select-loan="L-1043"><span class="scenario-number">02</span><span>A clean application<small>L-1043 · The full lifecycle</small></span><span class="scenario-indicator" aria-hidden="true"></span></button>
-          <button type="button" class="scenario-button" data-select-loan="L-1045"><span class="scenario-number">03</span><span>A policy exception<small>L-1045 · ₹3 lakh escalation</small></span><span class="scenario-indicator" aria-hidden="true"></span></button>
-          <button type="button" class="scenario-button" data-select-loan="L-1044"><span class="scenario-number">04</span><span>A little breathing room<small>L-1044 · Borrower support</small></span><span class="scenario-indicator" aria-hidden="true"></span></button>
-        </div>
-        <div class="team-heading"><span class="sidebar-section-label">THE AGENT TEAM</span><span class="team-count">9</span></div>
-        <div class="agent-roster" id="agent-roster" aria-label="Agent team">
-          <div class="roster-agent" data-agent="front desk"><span class="roster-dot"></span>Front Desk</div>
-          <div class="roster-agent" data-agent="intake"><span class="roster-dot"></span>Intake</div>
-          <div class="roster-agent" data-agent="risk"><span class="roster-dot"></span>Risk</div>
-          <div class="roster-agent" data-agent="credit"><span class="roster-dot"></span>Credit</div>
-          <div class="roster-agent" data-agent="underwriter"><span class="roster-dot"></span>Underwriter</div>
-          <div class="roster-agent" data-agent="compliance"><span class="roster-dot"></span>Compliance</div>
-          <div class="roster-agent" data-agent="disbursement"><span class="roster-dot"></span>Disbursement</div>
-          <div class="roster-agent" data-agent="collections"><span class="roster-dot"></span>Collections</div>
-          <div class="roster-agent" data-agent="reporter"><span class="roster-dot"></span>Reporter</div>
-        </div>
-        <div class="sidebar-note"><svg class="icon"><use href="#i-shield"></use></svg><p>Agents apply the policy.<br><strong>People handle exceptions.</strong></p></div>
-        <div class="sidebar-footer"><span class="small-brand-mark">L</span><span>Lendix Finance<small>Synthetic lending workspace</small></span></div>
-      </aside>
-
-      <main class="main-shell" id="workspace">
-        <div class="demo-banner"><svg class="icon"><use href="#i-shield"></use></svg><span>Demo with synthetic data. Do not enter real personal information.</span><span class="demo-label">SIMULATION</span></div>
-        <header class="topbar">
-          <div class="breadcrumb">Workspace <span>/</span> <strong>Live operations</strong></div>
-          <div class="topbar-controls">
-            <span class="connection-state connecting" id="connection-state" role="status"><span class="connection-dot"></span><span id="connection-label">Connecting</span></span>
-            <div class="role-control"><span class="user-avatar" id="role-avatar" aria-hidden="true">RH</span><div><label for="role-select">Demo role · no real authentication</label><select id="role-select" aria-label="Synthetic demo role"><option value="risk_head">Risk head</option><option value="ops">Operations</option><option value="borrower">Borrower</option></select></div></div>
-          </div>
-        </header>
-        <div class="page-content">
-          <section class="page-heading" aria-labelledby="page-title"><div><div class="eyebrow">A SMALL OFFICE. A CAPABLE TEAM.</div><h1 id="page-title">The lending desk<span>.</span></h1><p>Written policy makes the decision. The risk head handles exceptions.</p></div><div class="date-chip"><svg class="icon"><use href="#i-clock"></use></svg><span id="today-label">Today</span></div></section>
-          <div id="page-notice" class="page-notice" role="alert" hidden></div>
-          <section class="metrics" aria-label="Workspace overview">
-            <div class="metric-card"><div><span class="metric-label">Applications</span><strong id="metric-loans">—</strong></div><span class="metric-icon"><svg class="icon"><use href="#i-list"></use></svg></span><span class="metric-description">Synthetic portfolio</span></div>
-            <div class="metric-card"><div><span class="metric-label">Escalated cases</span><strong id="metric-pending">—</strong></div><span class="metric-icon amber"><svg class="icon"><use href="#i-clock"></use></svg></span><span class="metric-description">Risk-head review required</span></div>
-            <div class="metric-card"><div><span class="metric-label">Documents created</span><strong id="metric-documents">—</strong></div><span class="metric-icon blue"><svg class="icon"><use href="#i-file"></use></svg></span><span class="metric-description">Ready to review & download</span></div>
-          </section>
-
-          <div class="workbench">
-            <div class="conversation-column">
-              <section class="loan-context" aria-label="Selected application">
-                <div class="loan-icon" aria-hidden="true"><svg class="icon"><use href="#i-file"></use></svg></div>
-                <div class="loan-select-wrap"><label for="loan-select">APPLICATION IN FOCUS</label><select id="loan-select"><option value="L-1042">L-1042 · Loading application…</option></select></div>
-                <div class="loan-badges"><span id="loan-status" class="status-badge neutral">Loading</span><span id="loan-risk" class="risk-label">Risk not assessed</span></div>
-              </section>
-
-              <section class="chat-panel panel" aria-labelledby="conversation-title">
-                <header class="panel-header"><div><span class="panel-heading-dot" aria-hidden="true"></span><h2 id="conversation-title">Office conversation</h2></div><span class="panel-subtitle">Your team, on call</span></header>
-                <div class="messages" id="messages" role="log" aria-live="polite" aria-relevant="additions" aria-label="Conversation messages" tabindex="0">
-                  <div class="welcome" id="welcome-card">
-                    <span class="welcome-emblem" aria-hidden="true"><span class="brand-mark"><span></span><span></span><span></span></span></span>
-                    <div class="eyebrow">WELCOME TO LENDIX</div><h3>What’s on your desk today?</h3><p>Review an application, watch the policy decision, and follow exceptions to the risk head.</p>
-                    <div class="welcome-options"><button type="button" data-command="review L-1042"><span class="welcome-option-icon">01</span><span>Review an application<small>Start with the mismatched loan</small></span><svg class="icon"><use href="#i-arrow"></use></svg></button><button type="button" data-command="Review today's 20 applications"><span class="welcome-option-icon">20</span><span>Work through today’s queue<small>Start a background batch review</small></span><svg class="icon"><use href="#i-arrow"></use></svg></button></div>
-                    <div class="welcome-footnote"><svg class="icon"><use href="#i-shield"></use></svg>Decisions from written policy. Exceptions reviewed by the risk head.</div>
-                  </div>
-                </div>
-                <div class="work-status" id="work-status" role="status" hidden><span class="working-spinner" aria-hidden="true"></span><span id="work-status-text">The team is working on your request…</span></div>
-                <div class="composer-area">
-                  <div class="quick-actions"><span class="quick-actions-label">NEXT STEPS</span><div id="loan-actions" class="action-chips" aria-label="Commands for the selected loan"></div></div>
-                  <form id="chat-form" class="composer-form">
-                    <label for="message-input" class="sr-only">Message the lending team</label><textarea id="message-input" name="message" placeholder="Ask the team to review L-1042…" rows="2" maxlength="8000" required></textarea>
-                    <div class="composer-toolbar"><div class="composer-tools"><input type="file" id="file-input" accept=".csv,.json,.pdf,.png,.jpg,.jpeg,.docx,.xlsx" hidden><button type="button" id="upload-button" class="upload-button" aria-label="Upload a document for the selected application"><svg class="icon"><use href="#i-paperclip"></use></svg><span>Attach document</span></button><span class="upload-hint">Up to 5 MB</span></div><button type="submit" id="send-button" class="send-button"><span>Send</span><svg class="icon"><use href="#i-send"></use></svg></button></div>
-                  </form>
-                  <div class="composer-caption"><span id="composer-context">Uploads go to L-1042. Include a loan ID in messages.</span><span>Enter to send <span aria-hidden="true">↵</span></span></div>
-                </div>
-              </section>
-              <div class="workspace-footnote"><svg class="icon"><use href="#i-shield"></use></svg>Simulated payouts and bureau data. Every decision records its policy rule and reasons.</div>
-            </div>
-
-            <aside class="inspector" aria-label="Agent activity and generated documents">
-              <section class="escalated-panel panel" aria-labelledby="escalated-title">
-                <header class="panel-header"><div><h2 id="escalated-title">Escalated</h2><span class="count-badge" id="escalated-count">0</span></div><span class="panel-subtitle">Risk head</span></header>
-                <p class="escalated-intro" id="escalated-help">Policy exceptions need a reasoned decision.</p>
-                <div id="escalated-list" class="escalated-list" aria-live="polite"></div>
-              </section>
-              <section class="activity-panel panel" aria-labelledby="activity-title">
-                <header class="panel-header"><div><h2 id="activity-title">Agent activity</h2><span class="live-label" id="activity-live-label">LIVE</span></div><span class="count-badge" id="activity-count">0</span></header>
-                <div class="activity-intro">Every handoff. Every tool. In the open.</div>
-                <div id="activity-feed" class="activity-feed" role="log" aria-live="polite" aria-relevant="additions" aria-label="Live agent actions" tabindex="0"><div class="activity-empty" id="activity-empty"><div class="activity-empty-icon"><span></span><span></span><span></span></div><strong>The office is ready</strong><p>Start a conversation to see your team work through each step.</p><span class="empty-status">Waiting for your first request</span></div></div>
-              </section>
-              <section class="documents-panel panel" aria-labelledby="documents-title"><header class="panel-header"><div><h2 id="documents-title">Documents</h2><span class="count-badge" id="documents-count">0</span></div><select id="document-filter" aria-label="Filter documents"><option value="all">All loans</option><option value="selected">In focus</option></select></header><div class="documents-list" id="documents-list"><div class="documents-empty"><svg class="icon"><use href="#i-file"></use></svg><strong>Paperwork, handled.</strong><p>Reports, letters, and schedules<br>will appear here as they’re ready.</p></div></div><div class="documents-footer">Specimen documents · Links expire in 24 hours</div></section>
-            </aside>
-          </div>
-          <footer class="page-footer"><span>Lendix Finance <span aria-hidden="true">/</span> The policy-led lending office</span><span>Built around trust.</span></footer>
-        </div>
-      </main>
-    </div>
-    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  </body>
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#F6F5F1">
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg"><title>Lendix · Workspace</title>
+  <link rel="stylesheet" href="/static/design.css"><link rel="stylesheet" href="/static/styles.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body class="workspace-page">
+  <a class="skip-link" href="#loan-view">Skip to loan</a>
+  <header class="site-header workspace-header"><div class="header-left"><a class="wordmark" href="/">Lendix<span class="wordmark-period">.</span></a><span class="header-divider" aria-hidden="true"></span><span class="header-page">Workspace</span></div><nav class="header-nav" aria-label="Workspace navigation"><span class="quiet-notice desktop-notice">Synthetic demo data</span><a href="/office">Live office <span aria-hidden="true">↗</span></a><label class="role-select-label"><span class="sr-only">Demo role with no real authentication</span><select id="role-select" aria-label="Demo role"><option value="ops">Operations</option><option value="risk_head">Risk head</option><option value="borrower">Borrower</option></select></label></nav></header>
+  <div class="mobile-workbar"><button id="queue-toggle" class="text-button" aria-expanded="false" aria-controls="loan-queue">Applications <span id="mobile-count"></span></button><span id="connection-label" class="quiet-notice" role="status">Connecting to the office</span><button id="activity-toggle" class="text-button" aria-expanded="false" aria-controls="activity-panel">Activity</button></div>
+  <div class="workspace-grid">
+    <aside class="loan-queue" id="loan-queue" aria-label="Loan queue"><div class="queue-heading"><div><p class="eyebrow">Your desk</p><h1>Applications <span id="queue-total">—</span></h1></div><button id="queue-close" class="text-button queue-close" aria-label="Close applications">Close</button></div><label class="queue-search"><svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><circle cx="8" cy="8" r="5.5"></circle><path d="m12 12 5 5"></path></svg><input id="loan-search" type="search" placeholder="Search ID or name" aria-label="Search applications by ID or name"></label><div id="queue-filters" class="queue-filters" role="group" aria-label="Filter applications"><button class="filter active" data-filter="all" aria-pressed="true">All</button><button class="filter" data-filter="person" aria-pressed="false">Needs a person</button><button class="filter" data-filter="progress" aria-pressed="false">In progress</button><button class="filter" data-filter="declined" aria-pressed="false">Declined</button><button class="filter" data-filter="approved" aria-pressed="false">Approved</button><button class="filter" data-filter="closed" aria-pressed="false">Closed</button></div><div id="queue-list" class="queue-list"><div class="queue-skeleton" aria-label="Loading applications"><span class="skeleton short"></span><span class="skeleton long"></span><span class="skeleton"></span></div></div><div class="queue-footer"><span class="mono">A synthetic portfolio</span><button class="text-button" id="batch-button">Review today's 20 applications <span aria-hidden="true">→</span></button></div></aside>
+    <main id="loan-view" class="loan-view" tabindex="-1"><div id="page-notice" class="page-notice" role="alert" hidden></div><div id="loan-content"><div class="loan-loading" aria-label="Loading loan"><span class="skeleton short"></span><span class="skeleton long"></span><span class="skeleton"></span></div></div><div class="office-command"><form id="command-form"><label class="mono" for="command-input">Ask the office</label><div class="command-input-row"><input id="command-input" placeholder="Review L-1043" autocomplete="off" maxlength="8000" required><button class="command-send" type="submit">Send <span aria-hidden="true">→</span></button></div></form><div id="command-suggestions" class="command-suggestions" aria-label="Suggested actions"></div><span class="command-notice">Demo with synthetic data. Do not enter real personal information.</span></div></main>
+    <aside class="activity-panel" id="activity-panel" aria-labelledby="activity-title"><div class="activity-heading"><div><p class="eyebrow">The record, as it happens</p><h2 id="activity-title">Office activity</h2></div><button id="activity-close" class="text-button activity-close" aria-label="Close activity">Close</button></div><div class="activity-status"><span class="connection-mark" aria-hidden="true"></span><span id="activity-connection">Connecting</span></div><div id="activity-list" class="activity-list"><p class="activity-empty">When an application moves, the record appears here.</p></div><a class="activity-office-link" href="/office">Watch the live office <span aria-hidden="true">↗</span></a></aside>
+  </div>
+  <dialog id="decision-dialog" class="action-dialog" aria-labelledby="decision-title"><form id="decision-form"><div class="dialog-topline"><span class="mono" id="decision-loan-id"></span><button type="button" class="text-button" data-close-dialog="decision-dialog">Close</button></div><p class="eyebrow">A person considers the exception</p><h2 id="decision-title">Record your decision.</h2><p id="decision-context" class="dialog-description"></p><label class="field">Outcome<select id="decision-outcome" required><option value="">Choose an outcome</option><option value="approve">Approve requested amount</option><option value="approve_lower">Approve lower amount</option><option value="decline">Decline</option></select></label><label id="decision-amount-field" class="field" hidden>Amount to approve (₹)<input id="decision-amount" type="number" min="0.01" step="0.01"><span class="field-help" id="decision-amount-help"></span></label><label class="field">Reason on record<textarea id="decision-reason" rows="3" minlength="10" maxlength="1500" required placeholder="Explain the evidence behind your decision"></textarea><span class="field-help">Required for every decision. At least 10 characters.</span></label><p id="decision-form-error" class="form-error" role="alert" hidden></p><button class="button" type="submit">Record decision <span aria-hidden="true">→</span></button></form></dialog>
+  <dialog id="terms-dialog" class="action-dialog" aria-labelledby="terms-title"><div class="dialog-topline"><span class="mono" id="terms-loan-id"></span><button type="button" class="text-button" data-close-dialog="terms-dialog">Close</button></div><p class="eyebrow">Before you accept</p><h2 id="terms-title">Your Key Facts Statement.</h2><p class="dialog-description">Read the full statement, including fees, total cost and your cooling-off exit right.</p><div id="terms-details" class="terms-details"></div><div id="terms-document"></div><label class="terms-confirm"><input id="terms-confirm" type="checkbox">I have read the Key Facts Statement and accept these synthetic demo terms.</label><button id="terms-accept" class="button" disabled>Accept Key Facts Statement <span aria-hidden="true">→</span></button></dialog>
+  <input id="upload-input" type="file" accept=".csv,.json,.pdf,.png,.jpg,.jpeg,.docx,.xlsx" hidden>
+  <div id="toast" class="toast" role="status" hidden></div>
+</body>
 </html>

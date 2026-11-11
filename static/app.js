@@ -1,600 +1,325 @@
 "use strict";
-
 (() => {
   const $ = (id) => document.getElementById(id);
-  const roleNames = { risk_head: "Risk head", ops: "Operations", borrower: "Borrower" };
-  const roleInitials = { risk_head: "RH", ops: "OP", borrower: "BR" };
-  const contextActions = {
-    "L-1042": [
-      ["Review application", "review L-1042"],
-      ["Add bank statement", "add bank statement L-1042"],
-    ],
-    "L-1043": [
-      ["Review", "review L-1043"],
-      ["Accept KFS", "accept KFS L-1043"],
-      ["Disburse", "disburse L-1043"],
-      ["Pay EMI", "pay EMI L-1043"],
-      ["Close", "close L-1043"],
-    ],
-    "L-1045": [["Review policy exception", "review L-1045"]],
-    "L-1044": [["Request hardship support", "I lost my job L-1044"], ["Review", "review L-1044"]],
+  const node = (tag, className = "", text) => {
+    const element = document.createElement(tag);
+    if (className) element.className = className;
+    if (text !== undefined && text !== null) element.textContent = String(text);
+    return element;
   };
-  let state = { loans: [], documents: [], users: [] };
-  let selectedLoan = "L-1042";
-  let posting = false;
-  let uploading = false;
-  let eventStream;
-  let eventCount = 0;
-  let refreshTimer;
-  let refreshPromise;
-  let toastTimer;
-  let pendingTimer;
-  const pendingJobs = new Set();
-  const finishedJobs = new Set();
-  const seenEvents = new Set();
-  const localDocuments = new Map();
-  const agentTimers = new Map();
-  const exceptionDrafts = new Map();
-  const conversationId = `console-${typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
-
-  const el = (tag, className, text) => {
-    const node = document.createElement(tag);
-    if (className) node.className = className;
-    if (text !== undefined && text !== null) node.textContent = String(text);
-    return node;
-  };
-
-  function icon(name) {
-    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("class", "icon");
-    svg.setAttribute("aria-hidden", "true");
-    const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
-    use.setAttribute("href", `#i-${name}`);
-    svg.append(use);
-    return svg;
+  const storage = { get(key) { try { return localStorage.getItem(key); } catch (_) { return null; } }, set(key, value) { try { localStorage.setItem(key, value); } catch (_) {} } };
+  const roles = new Set(["ops", "risk_head", "borrower"]);
+  const params = new URLSearchParams(location.search);
+  let role = params.get("role") || storage.get("lendix.role") || "ops";
+  if (!roles.has(role)) role = "ops";
+  $("role-select").value = role;
+  storage.set("lendix.role", role);
+  let selected = params.get("loan") || storage.get("lendix.loan") || "L-1042";
+  let state = { loans: [], documents: [] };
+  let filter = "all", search = "", posting = false, refreshTimer, renderTimer, toastTimer, refreshing;
+  let eventLoan = null, source;
+  const notes = new Map(), work = new Map(), jobs = new Map(), completedJobs = new Set(), seenEvents = new Set(), events = [];
+  const openDetails = new Set();
+  const stages = ["Application", "Intake", "Risk", "Credit", "Decision", "Compliance", "Payout", "Repayments", "Closed"];
+  const stageTargets = ["application", "application", "findings", "money", "decision", "compliance", "payout", "repayments", "repayments"];
+  const agentSteps = { "Front Desk": 0, Intake: 1, Risk: 2, Credit: 3, Underwriter: 4, Compliance: 5, Disbursement: 6, Collections: 7 };
+  const outcomes = { approve: "Approved", approve_lower: "Approved lower", decline: "Declined", escalate: "Escalated" };
+  const statusWords = { new: "Ready for review", pending: "Ready for review", received: "Received", awaiting_documents: "Needs documents", escalated: "Escalated", approved: "Approved", declined: "Declined", disbursed: "In repayment", closed: "Closed", restructure_requested: "Hardship review", withdrawn: "Withdrawn" };
+  const docNames = { application_acknowledgment: "Application acknowledgment", missing_documents_request: "Missing documents request", consent_record: "Consent record", kyc_verification_summary: "KYC verification summary", risk_report: "Risk report", risk_chart: "Risk chart", decision_note: "Underwriting decision note", credit_appraisal: "Credit appraisal", sanction_letter: "Sanction letter", rejection_letter: "Rejection letter", key_facts_statement: "Key Facts Statement", loan_agreement_summary: "Loan agreement summary", disbursement_advice: "Simulated disbursement advice", repayment_schedule: "Repayment schedule", payment_receipt: "Payment receipt", payment_reminder: "Payment reminder", restructure_request: "Restructure request", no_dues_certificate: "No Dues Certificate", grievance_acknowledgment: "Grievance acknowledgment", review_queue: "Daily review queue", portfolio_dashboard: "Portfolio dashboard", audit_log: "Audit log" };
+  const docStages = { application_acknowledgment: 0, consent_record: 1, kyc_verification_summary: 1, missing_documents_request: 1, risk_report: 2, risk_chart: 2, decision_note: 4, credit_appraisal: 4, rejection_letter: 4, sanction_letter: 5, key_facts_statement: 5, loan_agreement_summary: 5, disbursement_advice: 6, repayment_schedule: 7, payment_receipt: 7, payment_reminder: 7, restructure_request: 7, no_dues_certificate: 8 };
+  const money = (value) => Number.isFinite(Number(value)) && value !== null && value !== "" && value !== undefined ? "₹" + new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 }).format(Number(value)) : "Not recorded";
+  const pct = (value) => Number.isFinite(Number(value)) && value !== null && value !== undefined ? new Intl.NumberFormat("en-IN", { style: "percent", maximumFractionDigits: 1 }).format(value) : "Not recorded";
+  const words = (value) => String(value || "Not recorded").replace(/_/g, " ");
+  const time = (value) => { const date = new Date(value); return Number.isNaN(date.getTime()) ? "" : new Intl.DateTimeFormat("en-IN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" }).format(date); };
+  const date = (value) => { const parsed = new Date(value); return Number.isNaN(parsed.getTime()) ? "Not recorded" : new Intl.DateTimeFormat("en-IN", { day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Kolkata" }).format(parsed); };
+  const loan = () => state.loans.find((item) => item.id === selected);
+  const docsFor = (id) => state.documents.filter((item) => item.loan_id === id).sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+  const needsPerson = (item) => ["escalated", "restructure_requested"].includes(item.status);
+  function safeUrl(value) { try { const url = new URL(value, location.origin); return url.origin === location.origin && url.pathname.startsWith("/files/") ? url.pathname + url.search : null; } catch (_) { return null; } }
+  function button(label, callback, className = "button") { const element = node("button", className, label); element.type = "button"; element.addEventListener("click", callback); return element; }
+  function toast(message) { $("toast").textContent = message; $("toast").hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $("toast").hidden = true; }, 5000); }
+  function notice(message = "") { $("page-notice").textContent = message; $("page-notice").hidden = !message; }
+  function pill(text, tone = "") { const element = node("span", "pill " + tone); element.append(node("span", "pill-dot"), document.createTextNode(text)); element.firstChild.setAttribute("aria-hidden", "true"); return element; }
+  function statusTone(item) { if (["declined"].includes(item.status)) return "amber"; if (needsPerson(item)) return "blue"; if (["approved", "closed"].includes(item.status)) return "green"; return ""; }
+  function stageOf(item) {
+    if (item.status === "closed") return 8;
+    if (["disbursed", "restructure_requested"].includes(item.status)) return 7;
+    if (item.kfs_accepted) return 6;
+    if (item.kfs_issued) return 5;
+    if (item.underwriting) return 4;
+    if (item.credit) return 3;
+    if (item.risk) return 2;
+    if (item.status === "awaiting_documents") return 1;
+    return 0;
   }
-
-  function humanize(value) {
-    return String(value || "Not reviewed").replace(/[_-]/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
-  }
-
-  function timeLabel(timestamp) {
-    if (!timestamp) return "Now";
-    const date = new Date(timestamp);
-    if (Number.isNaN(date.getTime())) return "Now";
-    return new Intl.DateTimeFormat("en-IN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" }).format(date);
-  }
-
-  function showToast(message, isError = false) {
-    const toast = $("toast");
-    toast.textContent = message;
-    toast.classList.toggle("error", isError);
-    toast.hidden = false;
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { toast.hidden = true; }, isError ? 8000 : 4500);
-  }
-
-  function notice(message = "") {
-    $("page-notice").textContent = message;
-    $("page-notice").hidden = !message;
-  }
-
-  function safeFileUrl(value) {
-    if (typeof value !== "string" || !value) return null;
-    try {
-      const url = new URL(value, location.origin);
-      if (url.origin !== location.origin || !url.pathname.startsWith("/files/")) return null;
-      return url.href;
-    } catch (_) {
-      return null;
+  function primaryAction(item) {
+    if (role === "ops") {
+      if (["new", "pending", "received"].includes(item.status)) return { label: "Run review", message: `review ${item.id}` };
+      if (item.status === "awaiting_documents") return (item.documents || []).includes("bank_statement") ? { label: "Add documents", upload: true } : { label: "Add bank statement", message: `add bank statement ${item.id}` };
+      if (item.status === "approved" && item.kfs_accepted) return { label: "Simulate payout", message: `disburse ${item.id}` };
+      if (item.status === "disbursed") return { label: "Settle remaining EMIs", message: `fast-forward ${item.id}` };
     }
-  }
-
-  function fileLink(documentInfo, className = "message-file") {
-    const url = safeFileUrl(documentInfo.url);
-    if (!url) return null;
-    const link = el("a", className);
-    link.href = url;
-    link.target = "_blank";
-    link.rel = "noopener noreferrer";
-    link.append(icon("file"), el("span", "", documentInfo.filename || "Download document"), icon("download"));
-    link.setAttribute("aria-label", `Open ${documentInfo.filename || "document"} in a new tab`);
-    return link;
-  }
-
-  function addMessage(text, options = {}) {
-    $("welcome-card")?.remove();
-    const container = $("messages");
-    const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 90;
-    const message = el("article", `message ${options.type || "agent"}`);
-    const author = options.author || "Front Desk";
-    const initials = author.split(/[\s_]+/).map((word) => word[0]).join("").slice(0, 2).toUpperCase();
-    const avatar = el("span", "message-avatar", initials);
-    avatar.setAttribute("aria-hidden", "true");
-    const content = el("div", "message-content");
-    const meta = el("div", "message-meta");
-    meta.append(el("span", "message-author", author), el("time", "message-time", timeLabel(options.timestamp || new Date().toISOString())));
-    content.append(meta);
-    if (text) content.append(el("p", "message-text", text));
-    if (options.document) {
-      const link = fileLink(options.document);
-      if (link) content.append(link);
+    if (role === "risk_head" && item.status === "escalated") return { label: "Decide", decide: true };
+    if (role === "borrower") {
+      if (item.status === "approved" && item.kfs_issued && !item.kfs_accepted) return { label: "Accept Key Facts Statement", terms: true };
+      if (["disbursed", "restructure_requested"].includes(item.status) && (!item.schedule || (item.paid_installments || 0) < item.schedule.length)) return { label: "Pay EMI", message: `pay EMI ${item.id}` };
     }
-    message.append(avatar, content);
-    container.append(message);
-    if (nearBottom || options.type === "user") container.scrollTop = container.scrollHeight;
+    return null;
   }
-
-  function selectedLoanInfo() {
-    return state.loans.find((loan) => String(loan.id) === selectedLoan);
+  function calmStatus(item) {
+    if (work.get(item.id)?.active) return `Working… ${work.get(item.id).agent || "Front Desk"} is ${work.get(item.id).agent === "Risk" ? "checking this loan" : "working on this loan"}.`;
+    if (item.status === "escalated") return "Waiting for the risk head to consider this exception.";
+    if (item.status === "restructure_requested") return "A hardship request is with the risk head. Revised terms are awaiting review.";
+    if (item.status === "declined") return "The policy decision is recorded. The borrower can review the reasons below.";
+    if (item.status === "closed") return "The loan is closed. Its No Dues Certificate is in Documents.";
+    if (item.status === "approved" && !item.kfs_accepted) return "Approved. The borrower needs to read and accept the Key Facts Statement.";
+    if (item.status === "approved") return "Terms accepted. Operations can request the simulated payout.";
+    if (item.status === "awaiting_documents") return "Intake is waiting for the missing application document.";
+    if (item.status === "disbursed") return role === "ops" ? "Demo settlement records all remaining installments. No real money moves." : "The simulated loan is in repayment. Ask the office if paying is difficult.";
+    return role === "ops" ? "Ready when you are. Run a review to begin." : "Operations can run the application review.";
   }
-
-  function loanRisk(loan) {
-    const risk = loan?.risk;
-    return typeof risk === "string" ? risk : risk?.band || risk?.risk_band || loan?.risk_band;
-  }
-
-  function renderContext() {
-    renderEscalated();
-    const loan = selectedLoanInfo();
-    const status = String(loan?.status || "Not reviewed");
-    const statusNode = $("loan-status");
-    statusNode.textContent = humanize(status);
-    statusNode.className = "status-badge";
-    if (/declin|reject|high|block/i.test(status)) statusNode.classList.add("danger");
-    else if (/approv|active|disburs|paid|closed|complete/i.test(status) && !/await|pending|recommend/i.test(status)) statusNode.classList.add("success");
-    else if (/missing|await|pending|review|recommend|escalat/i.test(status)) statusNode.classList.add("warning");
-    const risk = loanRisk(loan);
-    $("loan-risk").textContent = risk ? `${humanize(risk)} risk` : "Risk not assessed";
-    $("loan-risk").className = `risk-label ${["low", "medium", "high"].includes(risk) ? risk : ""}`;
-    $("message-input").placeholder = `Ask the team to review ${selectedLoan}…`;
-    $("composer-context").textContent = `Uploads go to ${selectedLoan}. Include a loan ID in messages.`;
-    const actions = $("loan-actions");
-    actions.replaceChildren();
-    const commands = contextActions[selectedLoan] || [["Review application", `review ${selectedLoan}`]];
-    for (const [label, command] of commands) {
-      const button = el("button", "action-chip", label);
-      button.type = "button";
-      button.dataset.command = command;
-      button.title = command;
-      button.disabled = posting;
-      actions.append(button);
+  function renderQueue() {
+    const focusId = document.activeElement?.id;
+    $("queue-total").textContent = String(state.loans.length);
+    $("mobile-count").textContent = `(${state.loans.length})`;
+    const matches = state.loans.filter((item) => {
+      const found = `${item.id} ${item.name}`.toLowerCase().includes(search.toLowerCase());
+      const match = filter === "all" || (filter === "person" && needsPerson(item)) || (filter === "progress" && ["new", "pending", "received", "awaiting_documents", "disbursed"].includes(item.status)) || item.status === filter;
+      return found && match;
+    }).sort((a, b) => Number(needsPerson(b)) - Number(needsPerson(a)) || a.id.localeCompare(b.id));
+    const list = $("queue-list"); list.replaceChildren();
+    if (!matches.length) list.append(node("p", "queue-empty", "No applications match. Try another name or filter."));
+    for (const item of matches) {
+      const row = button("", () => selectLoan(item.id), "queue-row" + (item.id === selected ? " selected" : ""));
+      row.id = `queue-${item.id}`; row.setAttribute("aria-current", item.id === selected ? "true" : "false");
+      row.setAttribute("aria-label", `${item.id}, ${item.name}, ${money(item.requested_amount)}, ${statusWords[item.status] || words(item.status)}`);
+      const top = node("span", "queue-row-top"); const id = node("span", "mono", item.id); top.append(id);
+      if (needsPerson(item)) { const dot = node("span", "needs-dot"); dot.setAttribute("aria-hidden", "true"); top.append(dot); }
+      const bottom = node("span", "queue-row-bottom"); bottom.append(node("span", "queue-row-stage", stages[stageOf(item)]), pill(statusWords[item.status] || words(item.status), statusTone(item)));
+      row.append(top, node("span", "queue-row-name", item.name), node("span", "queue-row-amount", money(item.approved_amount || item.requested_amount)), bottom); list.append(row);
     }
-    document.querySelectorAll("[data-select-loan]").forEach((button) => {
-      button.classList.toggle("selected", button.dataset.selectLoan === selectedLoan);
-      button.setAttribute("aria-pressed", String(button.dataset.selectLoan === selectedLoan));
+    if (focusId?.startsWith("queue-") && $(focusId)) $(focusId).focus({ preventScroll: true });
+  }
+  function selectLoan(id) {
+    if (!state.loans.some((item) => item.id === id)) return;
+    selected = id; storage.set("lendix.loan", id);
+    const url = new URL(location.href); url.searchParams.set("loan", id); history.replaceState(null, "", url.pathname + url.search);
+    $("loan-queue").classList.remove("open"); $("queue-toggle").setAttribute("aria-expanded", "false");
+    renderQueue(); renderLoan(); renderActivity(); $("loan-view").scrollTop = 0;
+  }
+  function section(id, title, label) { const wrap = node("section", "case-content-section"); wrap.id = id; const heading = node("div", "case-section-heading"); heading.append(node("h2", "", title)); if (label) heading.append(node("span", "mono", label)); wrap.append(heading); return wrap; }
+  function detailPair(label, value, className = "") { const pair = node("div", className); pair.append(node("dt", "", label), node("dd", "", value)); return pair; }
+  function renderRail(item) {
+    const rail = node("ol", "lifecycle"); rail.setAttribute("aria-label", "Loan lifecycle");
+    const currentWork = work.get(item.id), stage = currentWork?.active ? currentWork.stage : stageOf(item);
+    stages.forEach((name, index) => {
+      const li = node("li", index < stage ? "done" : index === stage ? "current" + (currentWork?.active ? " working" : "") : "");
+      const action = button("", () => {
+        const target = $(stageTargets[index]);
+        if (!target) { toast(`${name} has not started for this loan.`); return; }
+        if (target.tagName === "DETAILS") target.open = true;
+        target.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth", block: "start" });
+      }, ""); action.id = `step-${index}`; action.disabled = index > stage; action.setAttribute("aria-label", `${index + 1}. ${name}${index < stage ? ", complete" : index === stage ? ", current" : ", not started"}`);
+      if (index === stage) action.setAttribute("aria-current", "step");
+      action.append(node("span", "step-number", index < stage ? "✓" : String(index + 1).padStart(2, "0")), node("span", "step-name", name)); li.append(action); rail.append(li);
+    }); return rail;
+  }
+  function findLink(item, kind, label) { const file = docsFor(item.id).find((doc) => doc.kind === kind); if (!file || !safeUrl(file.url)) return null; const link = node("a", "", label || docNames[kind] || words(kind)); link.href = safeUrl(file.url); link.target = "_blank"; link.rel = "noopener noreferrer"; return link; }
+  function renderFindings(item) {
+    const wrap = section("findings", "What the agents found", item.risk ? "Recorded evidence" : "Awaiting Risk");
+    const risk = item.risk;
+    if (!risk) {
+      const empty = node("div", "pending-finding"), heading = node("h3", "", "The record is here."); heading.append(node("span", "", "The checks come next.")); empty.append(heading, node("p", "", ["disbursed", "restructure_requested"].includes(item.status) ? "This synthetic loan is already in repayment. No application review findings are recorded here." : "Run the review to see identity, payout and income checks alongside their evidence.")); wrap.append(empty); return wrap;
+    }
+    const codes = risk.codes || [];
+    if (!codes.length && risk.band !== "unverified") {
+      const clear = node("div", "clear-finding"); const mark = node("span", "clear-mark", "✓"); mark.setAttribute("aria-hidden", "true"); const copy = node("div"); copy.append(node("h3", "", "Nothing unusual found"), node("p", "", "The available verification records passed the configured risk checks.")); clear.append(mark, copy); wrap.append(clear); return wrap;
+    }
+    const findings = [...codes]; if (risk.band === "unverified") findings.push("SOURCE_UNAVAILABLE");
+    for (const code of findings) {
+      const info = findingInfo(item, code), card = node("article", "finding-card");
+      const copy = node("div"); copy.append(node("span", "severity", info.severity), node("h3", "finding-title", info.sentence));
+      const origin = node("p", "finding-source", `Risk rule ${code} · ${info.source}`);
+      const link = findLink(item, info.kind, "Open the verification document ↗"); if (link) origin.append(link); copy.append(origin);
+      const paper = node("div", "field-evidence"); paper.append(node("span", "mono", info.source));
+      info.fields.forEach(([label, value, flagged]) => { const pair = detailPair(label, value, "evidence-pair"); if (flagged) pair.lastChild.classList.add("flagged"); paper.append(pair); });
+      paper.append(node("p", "evidence-caption", "Recorded fields from the synthetic application and fixtures.")); card.append(copy, paper); wrap.append(card);
+    }
+    return wrap;
+  }
+  function findingInfo(item, code) {
+    const dictionary = {
+      PAYOUT_NAME_MISMATCH: { severity: "High", sentence: `The payout account is in ${item.payout_name}'s name, rather than ${item.name}'s.`, source: "Payout & identity records", kind: "kyc_verification_summary", fields: [["Applicant", item.name], ["Payout account holder", item.payout_name, true]] },
+      DOB_PAN_MISMATCH: { severity: "High", sentence: "The date of birth on the application differs from the identity record.", source: "Application & KYC record", kind: "kyc_verification_summary", fields: [["Application date of birth", date(item.dob), true], ["KYC date of birth", date(item.kyc_dob)]] },
+      NEW_NUMBER: { severity: "Note", sentence: "The mobile number was activated less than 90 days ago.", source: "Mobile activation fixture", kind: "risk_report", fields: [["Number ending", String(item.phone || "").slice(-4)], ["Activated on", date(item.phone_activated_at), true]] },
+      INCOME_DOC_GAP: { severity: "High", sentence: "Declared income is more than 30% above the bank statement amount.", source: "Application & statement", kind: "risk_report", fields: [["Declared monthly income", money(item.monthly_income), true], ["Statement monthly income", money(item.statement_income)]] },
+      SHARED_PAYOUT_ACCOUNT: { severity: "High", sentence: "The payout account appears on applications from more than one person.", source: "Application history", kind: "risk_report", fields: [["Payout account", item.payout_account, true], ["Applicant", item.name]] },
+      MULTIPLE_RECENT_APPLICATIONS: { severity: "Note", sentence: "The same phone or identity number appears in at least three recent applications.", source: "30-day application history", kind: "risk_report", fields: [["Identity reference", item.pan, true], ["Phone ending", String(item.phone || "").slice(-4)]] },
+      SOURCE_UNAVAILABLE: { severity: "Note", sentence: "Verification is incomplete. A missing source cannot be treated as a clear result.", source: "Risk source availability", kind: "risk_report", fields: [["Missing sources", (item.risk?.missing_sources || []).join(", ") || "Required source unavailable", true], ["Risk band", "Unverified"]] },
+    };
+    return dictionary[code] || { severity: "Note", sentence: item.risk?.explanations?.[item.risk.codes.indexOf(code)] || "A verification flag needs review.", source: "Risk report", kind: "risk_report", fields: [["Reason code", code, true]] };
+  }
+  function renderDecision(item) {
+    const decision = item.servicing_escalation || item.underwriting; if (!decision) return null;
+    const wrap = section("decision", item.servicing_escalation ? "Hardship review" : "The decision", "On record"); const layout = node("div", "decision-layout"), left = node("div");
+    left.append(node("div", "decision-word " + (decision.decision === "decline" ? "amber" : ["approve", "approve_lower"].includes(decision.decision) ? "green" : ""), outcomes[decision.decision] || words(decision.decision)), node("div", "policy-rule", `Policy rule / ${decision.rule || "Not recorded"}`));
+    const right = node("div", "decision-reasons"); const reasons = [...new Set(decision.reasons || item.rejection_reasons || [])]; reasons.slice(0, 3).forEach((reason) => right.append(node("p", "", reason)));
+    if (item.approved_amount && !item.servicing_escalation) right.prepend(node("p", "", `${money(item.approved_amount)} approved${item.approved_amount < item.requested_amount ? ` against ${money(item.requested_amount)} requested` : ""}.`));
+    const attribution = node("div", "decision-attribution"); const who = item.approval_source === "risk_head" && !item.servicing_escalation ? "Risk head, with reason on record" : `Underwriter, by policy v${decision.policy_version || "—"}`; attribution.append(node("strong", "", who)); if (item.override_reason && !item.servicing_escalation) attribution.append(node("p", "", item.override_reason)); right.append(attribution); layout.append(left, right); wrap.append(layout); return wrap;
+  }
+  function renderMoney(item) {
+    const credit = item.credit; if (!credit) return null;
+    const wrap = section("money", "The numbers", item.approved_amount ? "At the approved amount" : "At the requested amount"), grid = node("dl", "money-grid");
+    [["Verified monthly income", money(Math.min(item.monthly_income, item.statement_income))], ["Existing EMIs", money(item.existing_emi)], ["New monthly EMI", money(credit.emi)]].forEach(([label, value]) => grid.append(detailPair(label, value, "money-item"))); wrap.append(grid);
+    const heading = node("div", "foir-row"); heading.append(node("span", "", "Income committed to repayments"), node("strong", "", pct(credit.foir))); wrap.append(heading);
+    const track = node("div", "foir-track"); track.setAttribute("role", "meter"); track.setAttribute("aria-label", "Fixed obligation to income ratio, with a 50 percent policy cap"); track.setAttribute("aria-valuemin", "0"); track.setAttribute("aria-valuemax", "100"); const value = Math.max(0, Math.min(100, Number(credit.foir || 0) * 100)); track.setAttribute("aria-valuenow", String(value)); const fill = node("span", "foir-fill"); fill.style.width = `${value}%`; track.append(fill, node("span", "foir-cap")); wrap.append(track);
+    const axis = node("div", "foir-axis"); axis.append(node("span", "", "0%"), node("span", "", "Policy cap 50%"), node("span", "", "100%")); wrap.append(axis);
+    const eligible = node("div", "eligible-row"); eligible.append(node("span", "", "Eligible up to"), node("strong", "", money(credit.eligible_amount))); wrap.append(eligible); return wrap;
+  }
+  function renderDocuments(item) {
+    const files = docsFor(item.id), wrap = section("documents", "Documents", `${files.length} on file`);
+    if (!files.length) wrap.append(node("p", "section-note", "Reports, disclosures and letters appear here as the application moves forward."));
+    const groups = new Map(); files.forEach((file) => { const index = docStages[file.kind] ?? 0; if (!groups.has(index)) groups.set(index, []); groups.get(index).push(file); });
+    [...groups.keys()].sort((a, b) => a - b).forEach((index) => { const group = node("div", "doc-group"); group.append(node("h3", "", `${String(index + 1).padStart(2, "0")} / ${stages[index]}`));
+      groups.get(index).forEach((file) => { const url = safeUrl(file.url); if (!url) return; const link = node("a", "document-row"); link.href = url; link.target = "_blank"; link.rel = "noopener noreferrer"; link.setAttribute("aria-label", `Open ${docNames[file.kind] || words(file.kind)} in a new tab`);
+        const copy = node("div"), extension = String(file.filename || "").split(".").pop().toUpperCase(); copy.append(node("div", "document-name", (file.kind === "risk_report" && extension === "PNG") ? "Risk chart" : docNames[file.kind] || words(file.kind))); const meta = node("div", "document-metadata"); meta.append(node("span", "", extension), node("time", "", time(file.created_at))); copy.append(meta); const action = node("span", "document-download", "Open"); action.append(node("span", "", "↗")); link.append(copy, action); group.append(link); }); wrap.append(group);
     });
-    renderDocuments();
+    if (["new", "pending", "received", "awaiting_documents"].includes(item.status)) { const upload = button("Upload a document", () => $("upload-input").click(), "text-button"); wrap.append(upload); }
+    return wrap;
   }
-
-  function selectLoan(loanId) {
-    if (!loanId) return;
-    selectedLoan = loanId;
-    if (!Array.from($("loan-select").options).some((option) => option.value === loanId)) {
-      const option = el("option", "", loanId);
-      option.value = loanId;
-      $("loan-select").append(option);
-    }
-    $("loan-select").value = loanId;
-    renderContext();
+  function renderApplication(item) {
+    const wrap = node("details", "application-record"); wrap.id = "application"; wrap.open = openDetails.has("application"); wrap.addEventListener("toggle", () => { if (wrap.open) openDetails.add("application"); else openDetails.delete("application"); }); wrap.append(node("summary", "", "Application record")); const grid = node("dl", "application-grid");
+    [["Applicant", item.name], ["Requested", money(item.requested_amount)], ["Tenure", `${item.tenure_months} months`], ["Payout account holder", item.payout_name], ["Date of birth", date(item.dob)], ["Consent", item.consent ? "Recorded" : "Not recorded"]].forEach(([label, value]) => grid.append(detailPair(label, value))); wrap.append(grid); return wrap;
   }
-
-  function allDocuments() {
-    const documents = new Map();
-    for (const item of [...localDocuments.values(), ...(state.documents || [])]) {
-      if (!item || !safeFileUrl(item.url)) continue;
-      documents.set(item.url, item);
+  function renderServicing(item) {
+    const sections = [];
+    if (item.kfs_issued) {
+      const wrap = section("compliance", "Before payout", "Safeguards"); const list = node("ul", "checklist");
+      [[true, "Key Facts Statement issued"], [item.kfs_accepted, "Borrower acceptance recorded"], [item.account_verified, "Verified payout account recorded"]].forEach(([done, label]) => { const li = node("li"); li.append(node("span", done ? "done" : "waiting", done ? "✓" : "—"), document.createTextNode(label)); list.append(li); });
+      wrap.append(list, node("p", "section-note", `Cooling-off period: ${item.cooling_off_days || 1} day${(item.cooling_off_days || 1) === 1 ? "" : "s"}. The borrower can exit without penalty.`)); sections.push(wrap);
     }
-    return Array.from(documents.values()).sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+    if (item.disbursed_at) { const wrap = section("payout", "Payout", "Simulated"); wrap.append(node("p", "section-note", `${money(item.approved_amount)} · ${date(item.disbursed_at)}. No real money moved.`)); if (item.simulated_utr) wrap.append(node("p", "policy-rule", item.simulated_utr)); sections.push(wrap); }
+    if (["disbursed", "restructure_requested", "closed"].includes(item.status)) {
+      const wrap = section("repayments", item.status === "closed" ? "Repayments complete" : "Repayments", item.status === "closed" ? "Closed" : "In service"); const summary = node("div", "repayment-summary"); const count = node("div", "muted", "Installments recorded"); count.append(node("strong", "", `${item.paid_installments || 0} / ${item.schedule?.length || item.tenure_months}`)); const balance = node("div", "muted", "Remaining scheduled dues"); balance.append(node("strong", "", money(item.outstanding ?? item.outstanding_balance))); summary.append(count, balance); wrap.append(summary);
+      if (item.hardship_summary) { const support = node("div", "support-note"); support.append(node("h3", "", "A little breathing room"), node("p", "", "Your hardship request is with the risk head. No revised terms have been approved.")); wrap.append(support); }
+      sections.push(wrap);
+    }
+    return sections;
   }
-
-  function renderDocuments() {
-    const documents = allDocuments();
-    $("metric-documents").textContent = String(documents.length);
-    const filtered = $("document-filter").value === "selected" ? documents.filter((item) => item.loan_id === selectedLoan) : documents;
-    $("documents-count").textContent = String(filtered.length);
-    const list = $("documents-list");
-    list.replaceChildren();
-    if (!filtered.length) {
-      const empty = el("div", "documents-empty");
-      empty.append(icon("file"), el("strong", "", "Paperwork, handled."), el("p", "", "Reports, letters, and schedules will appear here as they’re ready."));
-      list.append(empty);
-      return;
-    }
-    for (const item of filtered) {
-      const filename = item.filename || "Document";
-      const extension = filename.includes(".") ? filename.split(".").pop().toLowerCase() : "file";
-      const link = el("a", "document-item");
-      link.href = safeFileUrl(item.url);
-      link.target = "_blank";
-      link.rel = "noopener noreferrer";
-      link.title = filename;
-      link.setAttribute("aria-label", `Open ${filename} in a new tab`);
-      const badge = el("span", `document-type ${["png", "jpg", "csv", "xlsx"].includes(extension) ? extension : ""}`, extension.slice(0, 5).toUpperCase());
-      const info = el("div", "document-info");
-      const meta = el("div", "document-meta");
-      meta.append(el("span", "", item.loan_id || "Portfolio"));
-      if (item.created_at) meta.append(el("span", "", timeLabel(item.created_at)));
-      info.append(el("p", "document-name", filename), meta);
-      link.append(badge, info, icon("download"));
-      list.append(link);
-    }
+  function renderNote(item) { const note = notes.get(item.id); if (!note) return null; const wrap = node("aside", "inline-note" + (note.error ? " error" : "")); wrap.setAttribute("aria-label", "Latest office reply"); wrap.append(node("span", "mono", note.error ? "The office / Needs attention" : "The office / Latest update"), node("p", "", note.text)); if (note.error && note.retry) wrap.append(button("Retry", () => sendCommand(note.retry, item.id, note.role || role), "text-button")); return wrap; }
+  function renderLoan() {
+    const item = loan(), root = $("loan-content"); if (!item) return;
+    const focusId = document.activeElement?.id;
+    root.replaceChildren();
+    const header = node("section", "case-header"), top = node("div", "case-header-top"); top.append(node("span", "case-id", `${item.id} / Loan application`), pill(statusWords[item.status] || words(item.status), statusTone(item)));
+    const heading = node("div", "case-heading-row"), name = node("div"); name.append(node("h1", "", item.name)); heading.append(name); const action = primaryAction(item);
+    if (action) { const actions = node("div", "case-action"), primary = button(action.label, () => { if (action.decide) openDecision(item); else if (action.terms) openTerms(item); else if (action.upload) $("upload-input").click(); else sendCommand(action.message, item.id); }); primary.id = "primary-action"; primary.disabled = !!work.get(item.id)?.active; actions.append(primary); heading.append(actions); }
+    const meta = node("div", "case-meta"); meta.append(node("span", "amount", money(item.approved_amount || item.requested_amount)), node("span", "separator"), node("span", "", `${item.tenure_months} months`)); if (item.risk?.band || item.risk_band) meta.append(node("span", "separator"), node("span", "", `${words(item.risk?.band || item.risk_band)} risk`));
+    const status = node("div", "case-status-line"); status.setAttribute("role", "status"); if (work.get(item.id)?.active) { const mark = node("span", "working-mark"); mark.setAttribute("aria-hidden", "true"); status.append(mark); } status.append(document.createTextNode(calmStatus(item)));
+    header.append(top, heading, meta, status); root.append(header, renderRail(item)); if (item.status === "declined") root.append(node("p", "stage-caption", "This application ends at the decision. No payout was made."));
+    root.append(renderFindings(item)); const decision = renderDecision(item); if (decision) root.append(decision);
+    const note = renderNote(item); if (note) root.append(note);
+    const numbers = renderMoney(item); if (numbers) root.append(numbers);
+    renderServicing(item).forEach((element) => root.append(element)); root.append(renderDocuments(item), renderApplication(item));
+    $("command-input").placeholder = `Review ${item.id}`;
+    renderSuggestions(item);
+    if (focusId && $(focusId) && ["primary-action", ...stages.map((_, index) => `step-${index}`)].includes(focusId)) $(focusId).focus({ preventScroll: true });
   }
-
-  function renderState() {
-    $("metric-loans").textContent = String(state.loans.length);
-    const waiting = state.loans.filter((loan) => ["escalated", "restructure_requested"].includes(loan.status));
-    $("metric-pending").textContent = String(waiting.length);
-    $("queue-count").textContent = String(waiting.length);
-    const select = $("loan-select");
-    select.replaceChildren();
-    for (const loan of state.loans) {
-      const option = el("option", "", `${loan.id} · ${loan.name || loan.applicant_name || "Application"}`);
-      option.value = String(loan.id);
-      select.append(option);
-    }
-    if (!state.loans.some((loan) => String(loan.id) === selectedLoan) && state.loans.length) selectedLoan = String(state.loans[0].id);
-    if (!state.loans.length) {
-      const option = el("option", "", `${selectedLoan} · Application`);
-      option.value = selectedLoan;
-      select.append(option);
-    }
-    select.value = selectedLoan;
-    renderContext();
-    renderEscalated();
+  function renderSuggestions(item) {
+    const root = $("command-suggestions"); root.replaceChildren(); const suggestions = [];
+    if (item.underwriting) suggestions.push(["See the decision", () => $("decision")?.scrollIntoView({ block: "start", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" })]);
+    if (["disbursed", "restructure_requested"].includes(item.status) && role === "borrower") suggestions.push(["Report job loss", () => sendCommand(`I lost my job and can't pay ${item.id}`, item.id)]);
+    if (["new", "pending", "received", "awaiting_documents"].includes(item.status)) suggestions.push(["Upload a document", () => $("upload-input").click()]);
+    if (item.status === "approved" && role === "borrower") suggestions.push(["Cooling-off exit", () => sendCommand(`exit ${item.id}`, item.id)]);
+    if (role === "risk_head") suggestions.push(["Export audit log", () => sendCommand("export audit log", item.id)]);
+    suggestions.push(["Review queue", () => sendCommand("review queue", item.id)]);
+    suggestions.slice(0, 3).forEach(([label, callback]) => root.append(button(label, callback, "")));
   }
-
-  function renderEscalated() {
-    const cases = state.loans.filter((loan) => ["escalated", "restructure_requested"].includes(loan.status));
-    $("escalated-count").textContent = String(cases.length);
-    const isRiskHead = $("role-select").value === "risk_head";
-    $("escalated-help").textContent = isRiskHead ? "Record a specific reason for every exception decision." : "Select the Risk head demo role to decide credit exceptions.";
-    const list = $("escalated-list");
-    const active = document.activeElement;
-    const editing = active?.closest(".exception-form");
-    if (editing && ["INPUT", "TEXTAREA"].includes(active.tagName) && cases.some((loan) => loan.id === editing.dataset.exceptionLoan)) return;
-    list.replaceChildren();
-    if (!cases.length) {
-      list.append(el("p", "escalated-empty", "No exceptions waiting. Review L-1045 to see a policy escalation."));
-      return;
-    }
-    for (const loan of cases) {
-      const card = el("article", "escalated-case");
-      const focus = el("button", "escalated-focus", `${loan.id} · ${loan.name}`);
-      focus.type = "button";
-      focus.dataset.selectLoan = loan.id;
-      card.append(focus, el("p", "escalated-reason", loan.servicing_escalation?.rule || loan.underwriting?.rule || "Policy exception"));
-      const note = allDocuments().find((item) => item.loan_id === loan.id && item.kind === "decision_note");
-      if (note) card.append(fileLink(note));
-      if (loan.status === "restructure_requested") {
-        card.append(el("p", "escalated-reason", "Hardship request for risk-head review. Revised terms require a separate servicing process."));
-      } else {
-        const draft = exceptionDrafts.get(loan.id) || {};
-        const form = el("form", "exception-form");
-        form.dataset.exceptionLoan = loan.id;
-        const choiceLabel = el("label", "", "Decision");
-        const choice = el("select");
-        choice.name = "decision";
-        for (const value of ["approve", "decline"]) { const option = el("option", "", humanize(value)); option.value = value; choice.append(option); }
-        choice.value = draft.decision || "approve";
-        choiceLabel.append(choice);
-        const amountLabel = el("label", "", "Approval amount (INR)");
-        const amount = el("input");
-        amount.name = "amount"; amount.type = "number"; amount.min = "0.01"; amount.step = "0.01";
-        amount.max = String(Math.min(loan.requested_amount, loan.credit?.eligible_amount || 0));
-        amount.value = draft.amount || String(Math.min(200000, Number(amount.max)));
-        amount.required = choice.value === "approve";
-        amountLabel.append(amount);
-        const reasonLabel = el("label", "", "Reason (required)");
-        const reason = el("textarea");
-        reason.name = "reason"; reason.required = true; reason.minLength = 10; reason.maxLength = 1500; reason.rows = 2;
-        reason.placeholder = "Explain the evidence supporting this decision";
-        reason.value = draft.reason || "";
-        reasonLabel.append(reason);
-        const submit = el("button", "send-button", "Record decision");
-        submit.type = "submit";
-        for (const field of [choice, amount, reason, submit]) field.disabled = !isRiskHead;
-        form.append(choiceLabel, amountLabel, reasonLabel, submit);
-        form.addEventListener("input", () => {
-          amount.required = choice.value === "approve";
-          exceptionDrafts.set(loan.id, {decision: choice.value, amount: amount.value, reason: reason.value});
-        });
-        form.addEventListener("submit", (event) => {
-          event.preventDefault();
-          if (!form.reportValidity()) return;
-          const terms = choice.value === "approve" ? ` at ${amount.value}` : "";
-          sendMessage(`${choice.value} ${loan.id}${terms} because ${reason.value.trim()}`);
-        });
-        card.append(form);
-      }
-      list.append(card);
-    }
+  function activityTitle(group) {
+    const event = group.events[group.events.length - 1];
+    if (event.kind === "handoff") { const match = event.text.match(/^(.+?) → (.+?): (L-\d+)/); if (match) return `${match[1]} handed ${match[3]} to ${match[2]}`; }
+    if (group.type === "checks") return `${group.agent} ${group.agent === "Compliance" ? "checked messages and documents" : "completed its recorded tools"} · ${group.events.length} ${group.events.length === 1 ? "event" : "events"}`;
+    if (event.kind === "decision") return `${event.data?.role === "risk_head" ? "Risk head" : "Underwriter"} recorded ${outcomes[event.data?.decision]?.toLowerCase() || "a decision"}`;
+    if (event.kind === "document") return `Reporter prepared ${docNames[event.data?.kind]?.toLowerCase() || "a document"}`;
+    if (event.kind === "mention") return "Reporter sent the case to the risk head";
+    if (event.kind === "escalation") return "Underwriter escalated the exception";
+    return event.text.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/@/g, "").slice(0, 180);
   }
-
-  async function responseData(response) {
-    let data;
-    try { data = await response.json(); } catch (_) { data = {}; }
-    if (!response.ok) {
-      let detail = data.detail || data.message || data.error;
-      if (Array.isArray(detail)) detail = detail.map((item) => item.msg || "Invalid request").join("; ");
-      if (typeof detail !== "string") detail = null;
-      throw new Error(detail || (response.status === 429 ? "The request limit has been reached. Please try again shortly." : `The office could not complete the request (${response.status}). Please try again.`));
-    }
-    return data;
+  function relative(value) { const seconds = Math.max(0, Math.round((Date.now() - new Date(value).getTime()) / 1000)); if (!Number.isFinite(seconds)) return ""; return seconds < 60 ? `${seconds} s ago` : seconds < 3600 ? `${Math.floor(seconds / 60)} min ago` : time(value); }
+  function renderActivity() {
+    const list = $("activity-list"), groups = []; const relevant = events.filter((event) => event._loan === selected || (!event._loan && ["progress", "error"].includes(event.kind))).filter((event) => !["status", "reply", "file", "office_action"].includes(event.kind));
+    const checks = new Map();
+    relevant.forEach((event) => {
+      if (event.kind === "tool") { const key = event.agent; if (checks.has(key)) checks.get(key).events.push(event); else { const group = { agent: key, type: "checks", events: [event] }; checks.set(key, group); groups.push(group); } }
+      else groups.push({ agent: event.agent, type: event.kind, events: [event] });
+    });
+    groups.sort((a, b) => Number(b.events[b.events.length - 1].id) - Number(a.events[a.events.length - 1].id));
+    const expanded = new Set(Array.from(list.querySelectorAll("details[open]")).map((element) => element.dataset.group)); list.replaceChildren();
+    if (!groups.length) list.append(node("p", "activity-empty", "When this application moves, each handoff and completed check appears here."));
+    groups.slice(0, 14).forEach((group) => { const detail = node("details", "activity-entry"), last = group.events[group.events.length - 1], key = `${group.agent}-${group.type}-${group.type === "checks" ? "" : last.id}`; detail.dataset.group = key; detail.open = expanded.has(key); const summary = node("summary"); summary.append(node("span", "activity-entry-title", activityTitle(group))); const timestamp = node("time", "", relative(last.timestamp)); timestamp.dateTime = last.timestamp; timestamp.dataset.timestamp = last.timestamp; summary.append(timestamp, node("span", "activity-expand", "Expand record")); const technical = node("ol", "activity-technical"); group.events.slice(-12).forEach((event) => technical.append(node("li", "", `${time(event.timestamp)} · ${event.agent} · ${event.text}`))); detail.append(summary, technical); list.append(detail); });
   }
-
+  function renderSoon() { clearTimeout(renderTimer); renderTimer = setTimeout(() => { renderQueue(); renderLoan(); renderActivity(); }, 100); }
+  async function responseData(response) { let data; try { data = await response.json(); } catch (_) { data = {}; } if (!response.ok) { const detail = Array.isArray(data.detail) ? data.detail.map((item) => item.msg).join("; ") : data.detail; throw new Error(typeof detail === "string" ? detail : "The office could not complete this request. Please retry."); } return data; }
   async function refreshState() {
-    if (refreshPromise) return refreshPromise;
-    refreshPromise = (async () => {
-      try {
-        const data = await responseData(await fetch("/api/state", { headers: { Accept: "application/json" } }));
-        state = { ...data, loans: Array.isArray(data.loans) ? data.loans : [], documents: Array.isArray(data.documents) ? data.documents : [] };
-        renderState();
-        notice();
-      } catch (error) {
-        notice(`The portfolio could not be refreshed. ${error.message}`);
-      } finally {
-        refreshPromise = null;
-      }
-    })();
-    return refreshPromise;
+    if (refreshing) return refreshing;
+    refreshing = (async () => { try { const data = await responseData(await fetch("/api/state")); state = { loans: Array.isArray(data.loans) ? data.loans : [], documents: Array.isArray(data.documents) ? data.documents : [] }; if (!loan() && state.loans.length) selected = state.loans[0].id; notice(); renderSoon(); } catch (_) { notice("The office could not load the portfolio. Check the connection and retry."); } finally { refreshing = null; } })(); return refreshing;
   }
-
-  function scheduleRefresh() {
-    clearTimeout(refreshTimer);
-    refreshTimer = setTimeout(refreshState, 350);
+  function scheduleRefresh() { if (refreshTimer) return; refreshTimer = setTimeout(() => { refreshTimer = null; refreshState(); }, 250); }
+  function finishJob(id, status) { completedJobs.add(id); const job = jobs.get(id); if (job) { const active = work.get(job.loanId); if (active?.jobId === id) active.active = false; if (status === "failed" || status === "interrupted") notes.set(job.loanId, { text: "The office could not finish this request. Please retry; the recorded loan state is preserved.", error: true, retry: job.retry, role: job.role }); jobs.delete(id); } renderSoon(); scheduleRefresh(); }
+  async function pollJob(id) { if (completedJobs.has(id)) return; try { const job = await responseData(await fetch(`/api/jobs/${encodeURIComponent(id)}`)); if (!["queued", "running"].includes(job.status)) { finishJob(id, job.status); return; } } catch (_) { /* SSE remains the primary source while a job request is unavailable. */ } if (jobs.has(id)) setTimeout(() => pollJob(id), 1200); }
+  async function sendCommand(message, loanId = selected, requestRole = role) {
+    const text = String(message || "").trim(); if (!text || posting) return; if (text.length > 8000) { toast("Keep the request under 8,000 characters."); return; }
+    posting = true; const matched = text.match(/\bL-\d+\b/i); if (matched) loanId = matched[0].toUpperCase();
+    const retry = /^(approve|decline|override)\b/i.test(text) ? `review ${loanId}` : text;
+    try { const result = await responseData(await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: text, role: requestRole, conversation_id: "office" }) }));
+      if (result.accepted === false) throw new Error("The office could not accept the request. Please retry.");
+      if (!completedJobs.has(result.job_id)) { jobs.set(result.job_id, { loanId, retry, role: requestRole }); work.set(loanId, { active: true, stage: stageOf(state.loans.find((item) => item.id === loanId) || {}), agent: "Front Desk", jobId: result.job_id }); setTimeout(() => pollJob(result.job_id), 1000); }
+      notes.delete(loanId); renderSoon(); scheduleRefresh();
+    } catch (error) { notes.set(loanId, { text: error.message, error: true, retry, role: requestRole }); renderSoon(); } finally { posting = false; }
   }
-
-  function setPosting(value) {
-    posting = value;
-    $("send-button").disabled = value;
-    $("send-button").querySelector("span").textContent = value ? "Sending…" : "Send";
-    document.querySelectorAll("[data-command]").forEach((button) => { button.disabled = value; });
-  }
-
-  function setWorkStatus(text) {
-    $("work-status").hidden = !text;
-    if (text) $("work-status-text").textContent = text;
-  }
-
-  function markRequestAccepted(jobId) {
-    if (!jobId || finishedJobs.has(jobId)) return;
-    pendingJobs.add(jobId);
-    setWorkStatus("Request accepted. The team is working in the background…");
-    clearTimeout(pendingTimer);
-    pendingTimer = setTimeout(() => {
-      if (pendingJobs.size) setWorkStatus("Work may still be running. Follow its progress in the activity feed.");
-    }, 60000);
-  }
-
-  async function sendMessage(message) {
-    const text = String(message || "").trim();
-    if (!text || posting) return;
-    if (text.length > 8000) {
-      showToast("Please keep your message under 8,000 characters.", true);
-      return;
-    }
-    const role = $("role-select").value;
-    const loanMatch = text.match(/\bL-\d+\b/i);
-    if (loanMatch && state.loans.some((loan) => String(loan.id) === loanMatch[0].toUpperCase())) selectLoan(loanMatch[0].toUpperCase());
-    setPosting(true);
-    addMessage(text, { type: "user", author: `${roleNames[role]} · You` });
-    $("message-input").value = "";
-    $("message-input").style.height = "";
-    try {
-      const result = await responseData(await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ message: text, role, conversation_id: conversationId }),
-      }));
-      if (result.accepted === false) throw new Error(result.message || "Your request was not accepted. Please try again.");
-      markRequestAccepted(result.job_id);
-      scheduleRefresh();
-    } catch (error) {
-      addMessage(error.message, { type: "error", author: "Office status" });
-      showToast(error.message, true);
-      if (!$("message-input").value) $("message-input").value = text;
-    } finally {
-      setPosting(false);
-      $("message-input").focus({ preventScroll: true });
-    }
-  }
-
-  async function uploadFile(file) {
-    if (!file || uploading) return;
-    const allowed = ["csv", "json", "pdf", "png", "jpg", "jpeg", "docx", "xlsx"];
-    const extension = file.name.split(".").pop().toLowerCase();
-    if (!allowed.includes(extension)) {
-      showToast("Choose a CSV, JSON, PDF, PNG, JPG, DOCX, or XLSX document.", true);
-      $("file-input").value = "";
-      return;
-    }
-    if (file.size > 5 * 1024 * 1024) {
-      showToast("This file is larger than 5 MB. Please choose a smaller file.", true);
-      $("file-input").value = "";
-      return;
-    }
-    const loanId = selectedLoan;
-    const role = $("role-select").value;
-    const form = new FormData();
-    form.append("file", file);
-    form.append("loan_id", loanId);
-    form.append("role", role);
-    form.append("conversation_id", conversationId);
-    uploading = true;
-    $("upload-button").disabled = true;
-    $("upload-button").querySelector("span").textContent = "Uploading…";
-    try {
-      const result = await responseData(await fetch("/api/upload", { method: "POST", body: form }));
-      if (result.accepted === false) throw new Error(result.message || "The document was not accepted.");
-      addMessage(`Attached ${file.name} to ${loanId}.`, { type: "user", author: `${roleNames[role]} · You` });
-      markRequestAccepted(result.job_id);
-      showToast(`Document received for ${loanId}.`);
-      scheduleRefresh();
-    } catch (error) {
-      addMessage(`The upload could not be completed. ${error.message}`, { type: "error", author: "Office status" });
-      showToast(error.message, true);
-    } finally {
-      uploading = false;
-      $("upload-button").disabled = false;
-      $("upload-button").querySelector("span").textContent = "Attach document";
-      $("file-input").value = "";
-    }
-  }
-
-  function addActivity(event) {
-    $("activity-empty")?.remove();
-    const feed = $("activity-feed");
-    const nearBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 70;
-    const kind = ["reply", "file", "handoff", "tool", "status", "progress", "error", "mention", "office_action"].includes(event.kind) ? event.kind : "status";
-    const item = el("article", `activity-item ${kind}`);
-    const meta = el("div", "activity-meta");
-    meta.append(el("span", "activity-agent", event.agent || "Office"), el("time", "activity-time", timeLabel(event.timestamp)));
-    item.append(meta, el("div", "activity-text", event.text || event.data?.tool || humanize(kind)));
-    const kindLabel = event.loan_id ? `${humanize(kind)} · ${event.loan_id}` : humanize(kind);
-    item.append(el("span", "activity-kind", kindLabel));
-    const progress = event.data?.progress ?? event.data?.percent;
-    if (kind === "progress" && typeof progress === "number" && Number.isFinite(progress)) {
-      const bar = el("progress", "event-progress");
-      bar.max = 100;
-      bar.value = Math.min(100, Math.max(0, progress));
-      bar.setAttribute("aria-label", "Batch review progress");
-      item.append(bar);
-    }
-    feed.append(item);
-    eventCount += 1;
-    $("activity-count").textContent = String(eventCount);
-    while (feed.children.length > 250) feed.firstElementChild.remove();
-    if (nearBottom) feed.scrollTop = feed.scrollHeight;
-  }
-
-  function highlightAgent(agent) {
-    if (!agent) return;
-    const name = String(agent).toLowerCase().replace(/_/g, " ");
-    const roster = Array.from(document.querySelectorAll(".roster-agent")).find((item) => item.dataset.agent === name);
-    if (!roster) return;
-    clearTimeout(agentTimers.get(name));
-    roster.classList.add("working");
-    agentTimers.set(name, setTimeout(() => { roster.classList.remove("working"); }, 5000));
-  }
-
   function handleEvent(event) {
-    if (!event || typeof event !== "object") return;
-    if (event.conversation_id && ![conversationId, "office"].includes(event.conversation_id)) return;
-    if (event.id) {
-      const id = String(event.id);
-      if (seenEvents.has(id)) return;
-      seenEvents.add(id);
+    if (!event || typeof event !== "object" || (event.id && seenEvents.has(event.id))) return; if (event.id) seenEvents.add(event.id);
+    const inferred = event.loan_id || String(event.text || "").match(/\bL-\d+\b/)?.[0]; if (inferred && state.loans.some((item) => item.id === inferred)) eventLoan = inferred;
+    const context = inferred || eventLoan; event._loan = context; events.push(event); if (events.length > 600) events.shift();
+    if (["tool", "handoff"].includes(event.kind) && context && agentSteps[event.agent] !== undefined) {
+      const previous = work.get(context) || {};
+      const step = event.agent === "Compliance" && (previous.stage ?? 0) < 4 ? (previous.stage ?? 0) : agentSteps[event.agent];
+      work.set(context, { ...previous, active: true, agent: event.agent, stage: step });
     }
-    if (["heartbeat", "ping", "connected"].includes(event.kind)) return;
-    addActivity(event);
-    highlightAgent(event.agent);
-    if (event.kind === "reply" || event.kind === "mention" || event.kind === "error") {
-      addMessage(event.text || "An update is available in the activity feed.", { author: event.agent || "Front Desk", timestamp: event.timestamp, type: event.kind === "error" ? "error" : "agent" });
+    if (event.kind === "reply" || event.kind === "error") {
+      if (context) { const previous = work.get(context); if (previous) previous.active = false; const last = [...jobs.values()].find((job) => job.loanId === context); const error = event.kind === "error" || /trouble reaching|please retry|retry the|model returned|daily model-call limit|could not (?:finish|complete)/i.test(event.text || ""); notes.set(context, { text: String(event.text || ""), error, retry: last?.retry || `review ${context}`, role: last?.role || role }); }
+      else if (event.kind === "error") notice(event.text);
     }
-    if (event.kind === "file") {
-      const data = event.data?.document || event.data || event;
-      const documentInfo = {
-        filename: data.filename || event.filename || "Document",
-        url: data.url || event.url,
-        loan_id: data.loan_id || event.loan_id,
-        kind: data.kind,
-        created_at: data.created_at || event.timestamp,
-      };
-      if (safeFileUrl(documentInfo.url)) {
-        localDocuments.set(documentInfo.url, documentInfo);
-        renderDocuments();
-        addMessage(event.text || "Your document is ready.", { author: event.agent || "Reporter", timestamp: event.timestamp, document: documentInfo });
-      }
-    }
-    if (event.kind === "progress") setWorkStatus(event.text || "The team is working through the review queue…");
-    const terminal = event.data?.done === true || event.data?.complete === true || ["completed", "complete", "finished", "failed", "interrupted"].includes(event.data?.status);
-    if (terminal) {
-      if (event.data?.job_id) {
-        finishedJobs.add(event.data.job_id);
-        pendingJobs.delete(event.data.job_id);
-      }
-      if (!pendingJobs.size) {
-        clearTimeout(pendingTimer);
-        setWorkStatus("");
-      }
-    }
-    scheduleRefresh();
+    if (event.data?.job_id && ["completed", "failed", "interrupted"].includes(event.data.status)) finishJob(event.data.job_id, event.data.status);
+    renderSoon(); scheduleRefresh();
   }
-
-  function setConnection(status) {
-    $("connection-state").className = `connection-state ${status}`;
-    $("connection-label").textContent = status === "connected" ? "Office connected" : status === "connecting" ? "Connecting" : "Reconnecting…";
-    $("activity-live-label").textContent = status === "connected" ? "LIVE" : "OFFLINE";
-    $("activity-live-label").classList.toggle("offline", status !== "connected");
-    if (status === "disconnected") setWorkStatus("Live updates disconnected. Reconnecting automatically…");
+  function connectEvents() { source = new EventSource("/api/events?conversation_id=office"); source.onopen = () => { $("connection-label").textContent = "Office connected"; $("activity-connection").textContent = "Live record"; scheduleRefresh(); }; source.onerror = () => { $("connection-label").textContent = "Reconnecting to the office"; $("activity-connection").textContent = "Reconnecting"; }; source.onmessage = (message) => { try { handleEvent(JSON.parse(message.data)); } catch (_) { notice("An office update could not be read. The loan record will refresh automatically."); scheduleRefresh(); } }; }
+  function openDecision(item) { $("decision-form").reset(); $("decision-form-error").hidden = true; $("decision-loan-id").textContent = item.id; $("decision-dialog").dataset.loan = item.id; $("decision-context").textContent = `${money(item.requested_amount)} requested · ${item.tenure_months} months. Policy rule: ${item.underwriting?.rule || "Exception review"}.`; $("decision-amount-field").hidden = true; $("decision-amount").required = false; $("decision-dialog").showModal(); }
+  function openTerms(item) {
+    $("terms-dialog").dataset.loan = item.id; $("terms-loan-id").textContent = item.id; $("terms-confirm").checked = false; $("terms-accept").disabled = true; const details = $("terms-details"); details.replaceChildren(); const credit = item.credit || {};
+    [["Loan amount", money(item.approved_amount)], ["APR", pct(credit.apr)], ["Monthly EMI", money(credit.emi)], ["Tenure", `${item.tenure_months} months`], ["Every disclosed fee", money(credit.fees ?? item.fees)], ["Total amount payable", money(credit.total_cost)], ["Cooling-off period", `${item.cooling_off_days || 1} day(s)`], ["Grievance contact", item.grievance_contact || "See the full KFS"]].forEach(([label, value]) => details.append(detailPair(label, value)));
+    const doc = $("terms-document"); doc.replaceChildren(); const link = findLink(item, "key_facts_statement", "Read the full Key Facts Statement ↗"); if (link) doc.append(link); $("terms-dialog").showModal();
   }
-
-  function connectEvents() {
-    if (!("EventSource" in window)) {
-      setConnection("disconnected");
-      notice("This browser does not support live office updates. Open the console in a browser with Server-Sent Events support.");
-      return;
-    }
-    setConnection("connecting");
-    eventStream = new EventSource(`/api/events?conversation_id=${encodeURIComponent(conversationId)}`);
-    eventStream.onopen = () => {
-      setConnection("connected");
-      if (!pendingJobs.size) setWorkStatus("");
-      scheduleRefresh();
-    };
-    eventStream.onmessage = (message) => {
-      try { handleEvent(JSON.parse(message.data)); } catch (_) {
-        notice("One office update could not be read. The connection is still active; the portfolio will refresh automatically.");
-        scheduleRefresh();
-      }
-    };
-    eventStream.onerror = () => { setConnection("disconnected"); };
-  }
-
-  document.addEventListener("click", (event) => {
-    const commandButton = event.target.closest("[data-command]");
-    if (commandButton) {
-      event.preventDefault();
-      sendMessage(commandButton.dataset.command);
-      return;
-    }
-    const loanButton = event.target.closest("[data-select-loan]");
-    if (loanButton) {
-      selectLoan(loanButton.dataset.selectLoan);
-      $("loan-select").focus({ preventScroll: true });
-    }
-  });
-  $("chat-form").addEventListener("submit", (event) => {
-    event.preventDefault();
-    sendMessage($("message-input").value);
-  });
-  $("message-input").addEventListener("keydown", (event) => {
-    if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
-      event.preventDefault();
-      sendMessage(event.currentTarget.value);
-    }
-  });
-  $("message-input").addEventListener("input", (event) => {
-    event.currentTarget.style.height = "auto";
-    event.currentTarget.style.height = `${Math.min(event.currentTarget.scrollHeight, 160)}px`;
-  });
-  $("loan-select").addEventListener("change", (event) => { selectLoan(event.currentTarget.value); });
-  $("role-select").addEventListener("change", (event) => {
-    const role = event.currentTarget.value;
-    $("role-avatar").textContent = roleInitials[role];
-    renderEscalated();
-    showToast(`Demo role changed to ${roleNames[role].toLowerCase()}. This is a synthetic identity, not authentication.`);
-  });
-  $("document-filter").addEventListener("change", renderDocuments);
-  $("upload-button").addEventListener("click", () => { $("file-input").click(); });
-  $("file-input").addEventListener("change", (event) => { uploadFile(event.currentTarget.files[0]); });
-  window.addEventListener("online", () => { refreshState(); });
-  window.addEventListener("offline", () => { setConnection("disconnected"); });
-  window.addEventListener("pagehide", () => { eventStream?.close(); });
+  $("decision-outcome").addEventListener("change", (event) => { const item = state.loans.find((entry) => entry.id === $("decision-dialog").dataset.loan); if (!item) return; const choice = event.target.value; const amount = $("decision-amount"), lower = choice === "approve_lower"; $("decision-amount-field").hidden = choice !== "approve" && !lower; amount.required = choice === "approve" || lower; amount.readOnly = choice === "approve"; amount.max = String(lower ? Math.min(item.requested_amount - .01, item.credit?.eligible_amount || 0) : item.requested_amount); amount.value = String(lower ? Math.min(200000, Number(amount.max)) : item.requested_amount); $("decision-amount-help").textContent = `Verified affordability limit: ${money(item.credit?.eligible_amount)}.`; });
+  $("decision-form").addEventListener("submit", (event) => { event.preventDefault(); const id = $("decision-dialog").dataset.loan, item = state.loans.find((entry) => entry.id === id), reason = $("decision-reason").value.trim(), outcome = $("decision-outcome").value, amount = Number($("decision-amount").value); if (!item || reason.length < 10 || (outcome !== "decline" && !(amount > 0 && amount <= Math.min(item.requested_amount, item.credit?.eligible_amount || 0)))) { $("decision-form-error").textContent = "Choose an affordable amount and give a specific reason of at least 10 characters."; $("decision-form-error").hidden = false; return; } $("decision-dialog").close(); sendCommand(`${outcome === "decline" ? "decline" : "approve"} ${id}${outcome === "decline" ? "" : ` at ${amount}`} because ${reason}`, id); });
+  $("terms-confirm").addEventListener("change", (event) => { $("terms-accept").disabled = !event.target.checked; });
+  $("terms-accept").addEventListener("click", () => { if (!$("terms-confirm").checked) return; const id = $("terms-dialog").dataset.loan; $("terms-dialog").close(); sendCommand(`accept KFS ${id}`, id); });
+  document.querySelectorAll("[data-close-dialog]").forEach((element) => element.addEventListener("click", () => $(element.dataset.closeDialog).close()));
+  $("role-select").addEventListener("change", (event) => { role = event.target.value; storage.set("lendix.role", role); renderLoan(); });
+  $("loan-search").addEventListener("input", (event) => { search = event.target.value; renderQueue(); });
+  $("queue-filters").addEventListener("click", (event) => { const target = event.target.closest("[data-filter]"); if (!target) return; filter = target.dataset.filter; document.querySelectorAll("[data-filter]").forEach((element) => { element.classList.toggle("active", element === target); element.setAttribute("aria-pressed", String(element === target)); }); renderQueue(); });
+  $("command-form").addEventListener("submit", (event) => { event.preventDefault(); const text = $("command-input").value.trim(); if (!text || posting) return; $("command-input").value = ""; sendCommand(text); });
+  $("batch-button").addEventListener("click", () => { if (role === "borrower") { toast("Choose Operations or Risk head to review the portfolio."); return; } sendCommand("Review today's 20 applications"); });
+  $("upload-input").addEventListener("change", async (event) => { const file = event.target.files[0], item = loan(); if (!file || !item) return; if (file.size > 5 * 1024 * 1024) { toast("Choose a document of 5 MB or smaller."); event.target.value = ""; return; } const form = new FormData(); form.append("file", file); form.append("loan_id", item.id); form.append("role", role); form.append("conversation_id", "office"); try { const result = await responseData(await fetch("/api/upload", { method: "POST", body: form })); if (!completedJobs.has(result.job_id)) { jobs.set(result.job_id, { loanId: item.id, retry: `review ${item.id}`, role }); work.set(item.id, { active: true, agent: "Intake", stage: 1, jobId: result.job_id }); setTimeout(() => pollJob(result.job_id), 1000); } toast("Document received for review."); renderSoon(); } catch (error) { notes.set(item.id, { text: error.message, error: true }); renderSoon(); } finally { event.target.value = ""; } });
+  function togglePanel(id, control, open) { $(id).classList.toggle("open", open); $(control).setAttribute("aria-expanded", String(open)); if (open) $(id).querySelector("button,input")?.focus(); }
+  $("queue-toggle").addEventListener("click", () => togglePanel("loan-queue", "queue-toggle", !$("loan-queue").classList.contains("open")));
+  $("queue-close").addEventListener("click", () => { togglePanel("loan-queue", "queue-toggle", false); $("queue-toggle").focus(); });
+  $("activity-toggle").addEventListener("click", () => togglePanel("activity-panel", "activity-toggle", !$("activity-panel").classList.contains("open")));
+  $("activity-close").addEventListener("click", () => { togglePanel("activity-panel", "activity-toggle", false); $("activity-toggle").focus(); });
+  document.addEventListener("keydown", (event) => { if (event.key === "Escape") { if ($("loan-queue").classList.contains("open")) { togglePanel("loan-queue", "queue-toggle", false); $("queue-toggle").focus(); } if ($("activity-panel").classList.contains("open")) { togglePanel("activity-panel", "activity-toggle", false); $("activity-toggle").focus(); } } });
+  setInterval(() => document.querySelectorAll("time[data-timestamp]").forEach((element) => { element.textContent = relative(element.dataset.timestamp); }), 15000);
+  window.addEventListener("pagehide", () => source?.close());
   window.addEventListener("pageshow", (event) => { if (event.persisted) connectEvents(); });
-  $("today-label").textContent = new Intl.DateTimeFormat("en-IN", { day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Kolkata" }).format(new Date());
-  renderContext();
-  refreshState();
-  connectEvents();
+  window.addEventListener("online", refreshState);
+  refreshState().then(connectEvents);
 })();
