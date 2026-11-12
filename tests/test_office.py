@@ -104,12 +104,13 @@ def test_escalation_walks_and_messages_risk_head(settings):
     app = create_app(settings, FakeClient(), office_client=fake.factory)
     with TestClient(app):
         assert wait_for(lambda: any(n == "send_direct_message" for n in fake.names()), 20)
-        walks = [a for t, n, a in fake.calls if n == "walk_to"]
+        walks = [a for t, n, a in fake.calls if n == "walk_to" and "person" in a]
         assert walks and walks[0] == {"person": "Parv · Risk Head"}
         dm = [a for t, n, a in fake.calls if n == "send_direct_message"][0]
         assert dm["to"] == "Parv · Risk Head" and "L-1045" in dm["text"]
         # The Reporter avatar (own token) does the walking and messaging.
-        assert all(t == "nmcp_reporter" for t, n, _ in fake.calls if n in {"walk_to", "send_direct_message"})
+        assert all(t == "nmcp_reporter" for t, n, a in fake.calls
+                   if n == "send_direct_message" or (n == "walk_to" and "person" in a))
 
 
 def test_office_failures_never_break_the_pipeline(settings):
@@ -189,3 +190,30 @@ def test_bad_agent_token_drops_only_that_avatar(settings):
     with TestClient(app) as client:
         assert wait_for(lambda: client.get("/healthz").json()["nonilion"] == "connected")
         assert set(app.state.office.avatars) == {"Front Desk", "Reporter"}
+
+
+def test_handoff_walks_the_file_to_the_next_desk(settings):
+    from app.nonilion.office import DESKS
+    settings.nonilion_agent_tokens = {"Risk": "nmcp_risk", "Credit": "nmcp_credit"}
+    fake = FakeNonilion()
+
+    async def no_wait(_):
+        await asyncio.sleep(0)
+
+    async def run():
+        bridge = OfficeBridge(None, settings, None, token="nmcp_front",
+                              agent_tokens=settings.nonilion_agent_tokens, client_factory=fake.factory, sleep=no_wait)
+        event = {"kind": "handoff", "agent": "Credit", "text": "Risk → Credit: L-1045 handed over (medium risk)", "loan_id": "L-1045"}
+        await bridge.animate(event)
+        await asyncio.gather(*(q.join() for q in bridge.queues.values()))
+        for task in bridge.tasks:
+            task.cancel()
+        return [(t, n, a) for t, n, a in fake.calls if n in {"walk_to", "say_out_loud", "emote"}]
+
+    calls = asyncio.run(run())
+    risk = [(n, a) for t, n, a in calls if t == "nmcp_risk"]
+    x, y = DESKS["Credit"]
+    assert risk[0] == ("walk_to", {"x": x, "y": y})
+    assert ("say_out_loud", {"text": "L-1045 for you, Credit."}) in risk
+    assert risk[-1] == ("walk_to", {"x": DESKS["Risk"][0], "y": DESKS["Risk"][1]})
+    assert ("emote", {"emote": "nod", "seconds": 2}) in [(n, a) for t, n, a in calls if t == "nmcp_credit"]

@@ -8,6 +8,7 @@ their own avatar; the others are shown through Front Desk's status line.
 """
 import asyncio
 import logging
+import random
 import re
 
 from .mcp import NonilionError, NonilionMCP
@@ -18,6 +19,17 @@ CONVERSATION = "nonilion"
 CHARACTERS = {"Front Desk": "elegantolderwoman", "Intake": "scientist", "Risk": "cybernaticarm",
               "Credit": "silverhairman", "Underwriter": "groomedbeard", "Compliance": "sikhgentleman",
               "Disbursement": "techpro", "Collections": "perfectbeardman", "Reporter": "greengown"}
+# Desk spots around the room's centre, checked as open floor on the Lendix room map.
+DESKS = {"Front Desk": (20, -36), "Intake": (-380, -260), "Risk": (-422, 163), "Credit": (0, 330),
+         "Underwriter": (420, 180), "Compliance": (380, -260), "Disbursement": (-700, -20),
+         "Collections": (673, -17), "Reporter": (0, -380)}
+# What each agent is responsible for, shown as its status between loans.
+DUTIES = {"Front Desk": "taking loan requests", "Intake": "checking application files",
+          "Risk": "watching for fraud flags", "Credit": "working out affordability",
+          "Underwriter": "applying credit policy v1", "Compliance": "checking every document",
+          "Disbursement": "verifying payout accounts", "Collections": "tracking repayments",
+          "Reporter": "filing today's documents"}
+HANDOFF = re.compile(r"^(?P<source>[A-Za-z ]+?) → (?P<target>[A-Za-z ]+?):")
 ROLE_PREFIX = re.compile(r"^\s*(?:as\s+)?(borrower|ops|operations|risk[ _-]?head)\s*[:,-]\s*", re.I)
 ANIMATED = {"handoff", "tool", "decision", "escalation", "mention", "office_action", "progress", "payout", "payment", "document"}
 CHAT = {"reply", "file", "error"}
@@ -57,6 +69,8 @@ class OfficeBridge:
         self.gestures = set()
         self.status_workers = {}
         self.gesture_slots = asyncio.Semaphore(4)
+        self.queues = {}
+        self.last_activity = 0.0
 
     async def say(self, agent, tool, args):
         """Best effort: a failed office gesture must never break a loan decision."""
@@ -76,6 +90,73 @@ class OfficeBridge:
         self.gestures.add(task)
         task.add_done_callback(self.gestures.discard)
 
+    def act(self, agent, steps):
+        """Queue moves for one avatar; they run in order so a walk finishes before the next step."""
+        if agent not in self.avatars:
+            return
+        queue = self.queues.get(agent)
+        if queue is None:
+            queue = self.queues[agent] = asyncio.Queue()
+            task = asyncio.create_task(self.perform(agent, queue))
+            self.tasks.append(task)
+        queue.put_nowait(list(steps))
+
+    async def perform(self, agent, queue):
+        while True:
+            steps = await queue.get()
+            try:
+                for tool, args in steps:
+                    if tool == "pause":
+                        await self.sleep(args)
+                        continue
+                    _, data = await self.say(agent, tool, args)
+                    if tool == "walk_to":
+                        # Let the walk play out before the next step; Nonilion reports its length.
+                        await self.sleep(min(float((data or {}).get("seconds") or 1), 12) + 0.5)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.warning("nonilion %s move failed: %s", agent, type(exc).__name__)
+            finally:
+                queue.task_done()
+
+    def desk(self, agent):
+        x, y = DESKS.get(agent, DESKS["Front Desk"])
+        return {"x": x, "y": y}
+
+    def busy(self):
+        return asyncio.get_running_loop().time() - self.last_activity < 30
+
+    async def office_life(self):
+        """Between loans, idle agents look busy with their own work and visit each other."""
+        while True:
+            await self.sleep(random.uniform(25, 50))
+            try:
+                if not self.connected or self.busy():
+                    continue
+                idle = [a for a in self.avatars if self.queues.get(a) is None or self.queues[a].empty()]
+                if not idle:
+                    continue
+                agent = random.choice(idle)
+                others = [a for a in self.avatars if a != agent]
+                routine = random.random()
+                if routine < 0.4 and others:
+                    friend = random.choice(others)
+                    self.act(agent, [("walk_to", self.desk(friend)), ("emote", {"emote": "wave", "seconds": 3}),
+                                     ("pause", 4), ("walk_to", self.desk(agent))])
+                elif routine < 0.7:
+                    self.act(agent, [("emote", {"emote": "coffee", "seconds": 5})])
+                else:
+                    self.act(agent, [("emote", {"emote": "think", "seconds": 4})])
+                self.status_soon(agent, f"{agent} · {DUTIES.get(agent, 'at work')}")
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.warning("nonilion office life failed: %s", type(exc).__name__)
+
+    def status_soon(self, agent, text):
+        asyncio.ensure_future(self.status(agent, text))
+
     async def enter(self):
         _, me = await self.front.call("whoami")
         self.owner = (me or {}).get("owner")
@@ -94,12 +175,14 @@ class OfficeBridge:
                 del self.avatars[agent]
                 await client.close()
                 continue
-            await self.say(agent, "set_status", {"status": f"{agent} · ready", "minutes": 240})
+            await self.say(agent, "set_status", {"status": f"{agent} · {DUTIES.get(agent, 'ready')}", "minutes": 240})
+            self.act(agent, [("walk_to", self.desk(agent)), ("emote", {"emote": "coffee", "seconds": 3})])
         self.connected = True
 
     async def start(self):
         self.cursor = max((e["id"] for e in self.store.events(0, limit=1_000_000)), default=0)
-        self.tasks = [asyncio.create_task(self.listen_loop()), asyncio.create_task(self.mirror_loop())]
+        self.tasks = [asyncio.create_task(self.listen_loop()), asyncio.create_task(self.mirror_loop()),
+                      asyncio.create_task(self.office_life())]
 
     async def stop(self):
         for task in [*self.tasks, *self.gestures]:
@@ -156,6 +239,8 @@ class OfficeBridge:
                 await self.sleep(3)
 
     async def mirror(self, batch):
+        if any(e["kind"] in ANIMATED for e in batch):
+            self.last_activity = asyncio.get_running_loop().time()
         # Many tool events arrive at once; only the latest per agent is worth a status change.
         last_tool = {e["agent"]: e["id"] for e in batch if e["kind"] in {"tool", "status"}}
         for event in batch:
@@ -200,8 +285,17 @@ class OfficeBridge:
                 await self.status("Front Desk", "Front Desk · ready")
         elif kind == "handoff":
             await self.status(agent, f"{label} · picked up the file")
+            match = HANDOFF.match(text)
+            source = match.group("source").strip() if match else None
+            # The sender carries the file over; agents without an avatar are covered by Front Desk.
+            courier = source if source in self.avatars else "Front Desk"
+            if courier != agent:
+                self.act(courier, [("walk_to", self.desk(agent)),
+                                   ("say_out_loud", {"text": short(f"{loan} for you, {agent}.", 80)}),
+                                   ("emote", {"emote": "thumbs_up", "seconds": 2}),
+                                   ("walk_to", self.desk(courier))])
             if agent in self.avatars:
-                self.gesture(agent, "emote", {"emote": "nod", "seconds": 2})
+                self.act(agent, [("emote", {"emote": "nod", "seconds": 2})])
         elif kind == "decision":
             speaker = agent if agent in self.avatars else "Front Desk"
             self.gesture(speaker, "say_out_loud", {"text": short(f"{loan}: {text}", 160)})
