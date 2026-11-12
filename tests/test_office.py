@@ -171,3 +171,21 @@ def test_escalation_falls_back_to_room_chat_when_dm_fails(settings):
         assert wait_for(lambda: any(n == "post_room_chat" and "mention" in a for _, n, a in fake.calls), 20)
         post = [a for _, n, a in fake.calls if n == "post_room_chat" and "mention" in a][0]
         assert post["mention"] == ["@riskhead"] and "L-1045" in post["text"]
+
+
+def test_bad_agent_token_drops_only_that_avatar(settings):
+    settings.nonilion_agent_tokens = {"Reporter": "nmcp_reporter", "Risk": "nmcp_bad"}
+    fake = FakeNonilion()
+
+    def factory(token):
+        client = fake.factory(token)
+        if token == "nmcp_bad":
+            async def call(name, args=None):
+                raise NonilionError(f"{name}: HTTP 401")
+            client.call = call
+        return client
+
+    app = create_app(settings, FakeClient(), office_client=factory)
+    with TestClient(app) as client:
+        assert wait_for(lambda: client.get("/healthz").json()["nonilion"] == "connected")
+        assert set(app.state.office.avatars) == {"Front Desk", "Reporter"}

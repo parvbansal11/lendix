@@ -80,11 +80,20 @@ class OfficeBridge:
         _, me = await self.front.call("whoami")
         self.owner = (me or {}).get("owner")
         self.risk_head = self.risk_head or self.owner
-        for agent, client in self.avatars.items():
+        for agent, client in list(self.avatars.items()):
             args = {"name": f"Lendix · {agent}", "character": CHARACTERS[agent]}
             if self.room:
                 args["room"] = self.room
-            await client.call("enter_room", args)
+            try:
+                await client.call("enter_room", args)
+            except NonilionError as exc:
+                if agent == "Front Desk":
+                    raise
+                # A bad agent token only costs that agent its avatar; Front Desk shows its work instead.
+                log.warning("nonilion avatar for %s unavailable: %s", agent, str(exc)[:80])
+                del self.avatars[agent]
+                await client.close()
+                continue
             await self.say(agent, "set_status", {"status": f"{agent} · ready", "minutes": 240})
         self.connected = True
 
