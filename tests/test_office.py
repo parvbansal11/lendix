@@ -16,7 +16,7 @@ class FakeNonilion:
     """Records tool calls; hands out queued listen events once."""
 
     def __init__(self, inbox=None):
-        self.calls, self.inbox = [], list(inbox or [])
+        self.calls, self.inbox, self.dm_fails = [], list(inbox or []), False
 
     def factory(self, token):
         outer = self
@@ -29,6 +29,10 @@ class FakeNonilion:
                 outer.calls.append((token, name, args or {}))
                 if name == "whoami":
                     return "me", {"owner": "riskhead", "room": "room-1"}
+                if name == "look_around":
+                    return "seen", {"people": [{"name": "Parv · Risk Head"}]}
+                if name == "send_direct_message" and outer.dm_fails:
+                    raise NonilionError("send_direct_message: nobody by that name")
                 if name == "listen":
                     events, outer.inbox = outer.inbox, []
                     if not events:
@@ -101,9 +105,9 @@ def test_escalation_walks_and_messages_risk_head(settings):
     with TestClient(app):
         assert wait_for(lambda: any(n == "send_direct_message" for n in fake.names()), 20)
         walks = [a for t, n, a in fake.calls if n == "walk_to"]
-        assert walks and walks[0] == {"person": "riskhead"}
+        assert walks and walks[0] == {"person": "Parv · Risk Head"}
         dm = [a for t, n, a in fake.calls if n == "send_direct_message"][0]
-        assert dm["to"] == "riskhead" and "L-1045" in dm["text"]
+        assert dm["to"] == "Parv · Risk Head" and "L-1045" in dm["text"]
         # The Reporter avatar (own token) does the walking and messaging.
         assert all(t == "nmcp_reporter" for t, n, _ in fake.calls if n in {"walk_to", "send_direct_message"})
 
@@ -157,3 +161,13 @@ def test_mcp_client_parses_text_and_json_and_hides_token():
     errors = asyncio.run(run())
     assert seen["auth"] == "Bearer nmcp_secret_value"
     assert "nmcp_secret_value" not in errors and "HTTP 401" in errors
+
+
+def test_escalation_falls_back_to_room_chat_when_dm_fails(settings):
+    fake = FakeNonilion([{"type": "message", "from": "someone", "text": "Review L-1045"}])
+    fake.dm_fails = True
+    app = create_app(settings, FakeClient(), office_client=fake.factory)
+    with TestClient(app):
+        assert wait_for(lambda: any(n == "post_room_chat" and "mention" in a for _, n, a in fake.calls), 20)
+        post = [a for _, n, a in fake.calls if n == "post_room_chat" and "mention" in a][0]
+        assert post["mention"] == ["@riskhead"] and "L-1045" in post["text"]

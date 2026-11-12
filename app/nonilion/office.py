@@ -210,18 +210,37 @@ class OfficeBridge:
         elif kind in {"payout", "payment", "document"}:
             await self.status(agent, f"{label} · {text}")
 
-    async def walk_to_risk_head(self, note):
-        if not self.risk_head:
-            return
-        walker = "Reporter" if "Reporter" in self.avatars else "Front Desk"
-        await self.say(walker, "walk_to", {"person": self.risk_head})
-        self.gesture(walker, "emote", {"emote": "raise_hand", "seconds": 4})
-        if note:
-            await self.message_risk_head(note)
+    async def find_risk_head(self, agent):
+        """The risk head's name as the room shows it now (display names change; handles don't resolve)."""
+        _, seen = await self.say(agent, "look_around", {})
+        people = [p.get("name") for p in (seen or {}).get("people", []) if p.get("name")]
+        wanted = (self.risk_head or "").casefold()
+        for name in people:
+            if wanted and (wanted == name.casefold() or wanted in name.casefold()):
+                return name
+        for name in people:
+            if "risk" in name.casefold() or (self.owner and self.owner.casefold() in name.casefold()):
+                return name
+        return people[0] if len(people) == 1 else None
 
-    async def message_risk_head(self, text):
-        if self.risk_head:
-            await self.say("Reporter", "send_direct_message", {"to": self.risk_head, "text": short(text, 1500)})
+    async def walk_to_risk_head(self, note):
+        walker = "Reporter" if "Reporter" in self.avatars else "Front Desk"
+        person = await self.find_risk_head(walker)
+        if person:
+            await self.say(walker, "walk_to", {"person": person})
+            self.gesture(walker, "emote", {"emote": "raise_hand", "seconds": 4})
+        if note:
+            await self.message_risk_head(note, person)
+
+    async def message_risk_head(self, text, person=None):
+        person = person or await self.find_risk_head("Reporter")
+        sent = None
+        if person:
+            sent, _ = await self.say("Reporter", "send_direct_message", {"to": person, "text": short(text, 1500)})
+        if sent is None:
+            # Nobody to DM right now: tag the room host in chat so the case is not lost.
+            tag = [f"@{self.owner}"] if self.owner else []
+            await self.say("Reporter", "post_room_chat", {"text": short(f"Risk head: {text}", 1500), "mention": tag})
 
     async def chat(self, event):
         kind = event["kind"]
