@@ -69,8 +69,11 @@ def test_public_console_and_state_identify_the_synthetic_workspace(office):
     client, app, _ = office
     home = client.get("/")
     assert home.status_code == 200
-    assert "Demo with synthetic data. Do not enter real personal information." in home.text
-    assert "no real authentication" in home.text
+    assert "Enter workspace" in home.text
+    workspace = client.get("/app")
+    assert workspace.status_code == 200
+    assert "Sandbox · Synthetic records only. Do not enter personal information." in workspace.text
+    assert 'aria-label="Workspace role"' in workspace.text
     assert client.get("/static/app.js").status_code == 200
     state = client.get("/api/state").json()
     assert state["demo_role_switching"] is True

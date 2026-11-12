@@ -19,7 +19,7 @@ def client(tmp_path):
         yield session
 
 
-@pytest.mark.parametrize("route,title", [("/", "Lendix · Workspace"), ("/app", "Lendix · Workspace"), ("/office", "Lendix · Live office")])
+@pytest.mark.parametrize("route,title", [("/", "Lendix · A clearer way to lend"), ("/app", "Lendix · Workspace"), ("/office", "Lendix · Live office")])
 def test_editorial_pages_are_served_with_the_unchanged_strict_csp(client, route, title):
     response = client.get(route)
     assert response.status_code == 200
@@ -47,7 +47,11 @@ class StaticPage(HTMLParser):
             self.ids.append(values["id"])
         for key in ("src", "href"):
             value = values.get(key, "")
-            assert not value.startswith(("http:", "https:", "//")), "Static pages must be self-contained"
+            if value.startswith(("http:", "https:", "//")):
+                assert tag == "a" and key == "href", "External scripts and assets are prohibited"
+                assert value == "https://www.nonilion.com/room/emp-3j51-ge67-xbc7"
+                assert values.get("target") == "_blank"
+                assert {"noopener", "noreferrer"} <= set(values.get("rel", "").split())
             if value.startswith("/static/"):
                 self.assets.add(value)
 
@@ -72,7 +76,7 @@ def test_every_html_file_is_csp_compatible_and_references_existing_assets(client
 
 
 def test_workspace_and_office_render_untrusted_content_without_html_sinks():
-    for name in ("app.js", "world.js"):
+    for name in ("app.js", "world.js", "landing.js"):
         source = (ROOT / "static" / name).read_text()
         assert ".innerHTML" not in source and "insertAdjacentHTML" not in source, name
         assert not re.search(r"\beval\s*\(", source), name

@@ -171,7 +171,7 @@ Set the key and available model IDs in `.env`, then run:
 .venv/bin/python scripts/demo_run.py --mock
 ```
 
-Open `http://127.0.0.1:8000` directly into the lending workspace (`/app` is an alias). Choose a demo role in the header; this is not authentication. `/office` shows the live pixel-art office, and `/office?tour=1` follows each handoff with the corresponding agent sheet. Fonts and assets are self-hosted; the pages need no CDN or build step.
+Open `http://127.0.0.1:8000` for the animated lending overview, or `/app` for the lending workspace. Choose a role in the workspace header; this is not authentication. `/office` shows the live pixel-art office, and `/office?tour=1` follows each handoff with the corresponding agent sheet. Fonts and assets are self-hosted; the pages need no CDN or build step. The workspace keeps applications, the loan record and activity visible together on desktop; activity becomes an optional sheet on smaller screens. Nonilion room links open the actual office in a new tab because Nonilion disallows cross-origin framing. Connection labels come from `/api/state`, and the local office follows the real event stream.
 
 The rehearsal script loads `.env` without replacing existing environment settings and writes an isolated database, event log and documents under `out/demo/`.
 

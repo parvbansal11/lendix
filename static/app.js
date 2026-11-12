@@ -76,7 +76,7 @@
     if (item.status === "approved" && !item.kfs_accepted) return "Approved. The borrower needs to read and accept the Key Facts Statement.";
     if (item.status === "approved") return "Terms accepted. Operations can request the simulated payout.";
     if (item.status === "awaiting_documents") return "Intake is waiting for the missing application document.";
-    if (item.status === "disbursed") return role === "ops" ? "Demo settlement records all remaining installments. No real money moves." : "The simulated loan is in repayment. Ask the office if paying is difficult.";
+    if (item.status === "disbursed") return role === "ops" ? "Settlement records all remaining installments. No real money moves." : "Repayments are underway. Ask the office if paying is difficult.";
     return role === "ops" ? "Ready when you are. Run a review to begin." : "Operations can run the application review.";
   }
   function renderQueue() {
@@ -156,7 +156,7 @@
     const wrap = section("findings", "What the agents found", item.risk ? "Recorded evidence" : "Awaiting Risk");
     const risk = item.risk;
     if (!risk) {
-      const empty = node("div", "pending-finding"), heading = node("h3", "", "The record is here."); heading.append(node("span", "", "The checks come next.")); empty.append(heading, node("p", "", ["disbursed", "restructure_requested"].includes(item.status) ? "This synthetic loan is already in repayment. No application review findings are recorded here." : "Run the review to see identity, payout and income checks alongside their evidence.")); wrap.append(empty); return wrap;
+      const servicing = ["disbursed", "restructure_requested"].includes(item.status); const empty = node("div", "pending-finding"), heading = node("h3", "", servicing ? "A record of repayment." : "The record is here."); heading.append(node("span", "", servicing ? "Support when it matters." : "The checks come next.")); empty.append(heading, node("p", "", servicing ? "This loan is already in repayment. Payment records and support requests are available below." : "Run the review to see identity, payout and income checks alongside their evidence.")); wrap.append(empty); return wrap;
     }
     const codes = risk.codes || [];
     if (!codes.length && risk.band !== "unverified") {
@@ -276,6 +276,7 @@
     if (group.type === "checks") return `${group.agent} ${group.agent === "Compliance" ? "checked messages and documents" : "completed its recorded tools"} · ${group.events.length} ${group.events.length === 1 ? "event" : "events"}`;
     if (event.kind === "decision") return `${event.data?.role === "risk_head" ? "Risk head" : "Underwriter"} recorded ${outcomes[event.data?.decision]?.toLowerCase() || "a decision"}`;
     if (event.kind === "document") return `Reporter prepared ${docNames[event.data?.kind]?.toLowerCase() || "a document"}`;
+    if (/^FYI risk_team:/.test(event.text)) return "Risk team received the recorded decision";
     if (event.kind === "mention") return "Reporter sent the case to the risk head";
     if (event.kind === "escalation") return "Underwriter escalated the exception";
     return event.text.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/@/g, "").slice(0, 180);
@@ -299,7 +300,7 @@
   async function responseData(response) { let data; try { data = await response.json(); } catch (_) { data = {}; } if (!response.ok) { const detail = Array.isArray(data.detail) ? data.detail.map((item) => item.msg).join("; ") : data.detail; throw new Error(typeof detail === "string" ? detail : "The office could not complete this request. Please retry."); } return data; }
   async function refreshState() {
     if (refreshing) return refreshing;
-    refreshing = (async () => { try { const data = await responseData(await fetch("/api/state")); state = { loans: Array.isArray(data.loans) ? data.loans : [], documents: Array.isArray(data.documents) ? data.documents : [] }; if (!loan() && state.loans.length) selected = state.loans[0].id; notice(); renderSoon(); } catch (_) { notice("The office could not load the portfolio. Check the connection and retry."); } finally { refreshing = null; } })(); return refreshing;
+    refreshing = (async () => { try { const data = await responseData(await fetch("/api/state")); $("nonilion-status").textContent = data.nonilion_connected ? "Agents connected to the room" : "Room opens in a new tab"; state = { loans: Array.isArray(data.loans) ? data.loans : [], documents: Array.isArray(data.documents) ? data.documents : [] }; if (!loan() && state.loans.length) selected = state.loans[0].id; notice(); renderSoon(); } catch (_) { notice("The office could not load the portfolio. Check the connection and retry."); } finally { refreshing = null; } })(); return refreshing;
   }
   function scheduleRefresh() { if (refreshTimer) return; refreshTimer = setTimeout(() => { refreshTimer = null; refreshState(); }, 250); }
   function finishJob(id, status) { completedJobs.add(id); const job = jobs.get(id); if (job) { const active = work.get(job.loanId); if (active?.jobId === id) active.active = false; if (status === "failed" || status === "interrupted") notes.set(job.loanId, { text: "The office could not finish this request. Please retry; the recorded loan state is preserved.", error: true, retry: job.retry, role: job.role }); jobs.delete(id); } renderSoon(); scheduleRefresh(); }

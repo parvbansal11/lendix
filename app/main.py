@@ -157,7 +157,7 @@ def create_app(settings=None, model=None, office_client=None):
 
     @app.get("/app")
     async def workspace():
-        return FileResponse(ROOT / "static/index.html")
+        return FileResponse(ROOT / "static/workspace.html")
 
     @app.get("/office")
     async def live_office():

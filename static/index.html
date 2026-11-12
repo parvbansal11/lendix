@@ -1,24 +1,55 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#F6F5F1">
-  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg"><title>Lendix · Workspace</title>
-  <link rel="stylesheet" href="/static/design.css"><link rel="stylesheet" href="/static/styles.css">
-  <link rel="stylesheet" href="/static/liquid.css">
-  <script src="/static/app.js" defer></script>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#edf3fa">
+  <meta name="description" content="Lendix brings evidence, written credit policy and human judgment into one considered lending process.">
+  <title>Lendix · A clearer way to lend</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/system.css"><link rel="stylesheet" href="/static/landing.css">
+  <script src="/static/landing.js" defer></script>
 </head>
-<body class="workspace-page">
-  <a class="skip-link" href="#loan-view">Skip to loan</a>
-  <header class="site-header workspace-header"><div class="header-left"><a class="wordmark" href="/">Lendix<span class="wordmark-period">.</span></a><span class="header-divider" aria-hidden="true"></span><span class="header-page">Workspace</span></div><nav class="header-nav" aria-label="Workspace navigation"><span class="quiet-notice desktop-notice">Synthetic demo data</span><a href="/office">Live office <span aria-hidden="true">↗</span></a><label class="role-select-label"><span class="sr-only">Demo role with no real authentication</span><select id="role-select" aria-label="Demo role"><option value="ops">Operations</option><option value="risk_head">Risk head</option><option value="borrower">Borrower</option></select></label></nav></header>
-  <div class="mobile-workbar"><button id="queue-toggle" class="text-button" aria-expanded="false" aria-controls="loan-queue">Applications <span id="mobile-count"></span></button><span id="connection-label" class="quiet-notice" role="status">Connecting to the office</span><button id="activity-toggle" class="text-button" aria-expanded="false" aria-controls="activity-panel">Activity</button></div>
-  <div class="workspace-grid">
-    <aside class="loan-queue" id="loan-queue" aria-label="Loan queue"><div class="queue-heading"><div><p class="eyebrow">Your desk</p><h1>Applications <span id="queue-total">—</span></h1></div><button id="queue-close" class="text-button queue-close" aria-label="Close applications">Close</button></div><label class="queue-search"><svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><circle cx="8" cy="8" r="5.5"></circle><path d="m12 12 5 5"></path></svg><input id="loan-search" type="search" placeholder="Search ID or name" aria-label="Search applications by ID or name"></label><div id="queue-filters" class="queue-filters" role="group" aria-label="Filter applications"><button class="filter active" data-filter="all" aria-pressed="true">All</button><button class="filter" data-filter="person" aria-pressed="false">Needs a person</button><button class="filter" data-filter="progress" aria-pressed="false">In progress</button><button class="filter" data-filter="declined" aria-pressed="false">Declined</button><button class="filter" data-filter="approved" aria-pressed="false">Approved</button><button class="filter" data-filter="closed" aria-pressed="false">Closed</button></div><div id="queue-list" class="queue-list"><div class="queue-skeleton" aria-label="Loading applications"><span class="skeleton short"></span><span class="skeleton long"></span><span class="skeleton"></span></div></div><div class="queue-footer"><span class="mono">A synthetic portfolio</span><button class="text-button" id="batch-button">Review today's 20 applications <span aria-hidden="true">→</span></button></div></aside>
-    <main id="loan-view" class="loan-view" tabindex="-1"><div id="page-notice" class="page-notice" role="alert" hidden></div><div id="loan-content"><div class="loan-loading" aria-label="Loading loan"><span class="skeleton short"></span><span class="skeleton long"></span><span class="skeleton"></span></div></div><div class="office-command"><form id="command-form"><label class="mono" for="command-input">Ask the office</label><div class="command-input-row"><input id="command-input" placeholder="Review L-1043" autocomplete="off" maxlength="8000" required><button class="command-send" type="submit">Send <span aria-hidden="true">→</span></button></div></form><div id="command-suggestions" class="command-suggestions" aria-label="Suggested actions"></div><span class="command-notice">Demo with synthetic data. Do not enter real personal information.</span></div></main>
-    <aside class="activity-panel" id="activity-panel" aria-labelledby="activity-title"><div class="activity-heading"><div><p class="eyebrow">The record, as it happens</p><h2 id="activity-title">Office activity</h2></div><button id="activity-close" class="text-button activity-close" aria-label="Close activity">Close</button></div><div class="activity-status"><span class="connection-mark" aria-hidden="true"></span><span id="activity-connection">Connecting</span></div><div id="activity-list" class="activity-list"><p class="activity-empty">When an application moves, the record appears here.</p></div><a class="activity-office-link" href="/office">Watch the live office <span aria-hidden="true">↗</span></a></aside>
-  </div>
-  <dialog id="decision-dialog" class="action-dialog" aria-labelledby="decision-title"><form id="decision-form"><div class="dialog-topline"><span class="mono" id="decision-loan-id"></span><button type="button" class="text-button" data-close-dialog="decision-dialog">Close</button></div><p class="eyebrow">A person considers the exception</p><h2 id="decision-title">Record your decision.</h2><p id="decision-context" class="dialog-description"></p><label class="field">Outcome<select id="decision-outcome" required><option value="">Choose an outcome</option><option value="approve">Approve requested amount</option><option value="approve_lower">Approve lower amount</option><option value="decline">Decline</option></select></label><label id="decision-amount-field" class="field" hidden>Amount to approve (₹)<input id="decision-amount" type="number" min="0.01" step="0.01"><span class="field-help" id="decision-amount-help"></span></label><label class="field">Reason on record<textarea id="decision-reason" rows="3" minlength="10" maxlength="1500" required placeholder="Explain the evidence behind your decision"></textarea><span class="field-help">Required for every decision. At least 10 characters.</span></label><p id="decision-form-error" class="form-error" role="alert" hidden></p><button class="button" type="submit">Record decision <span aria-hidden="true">→</span></button></form></dialog>
-  <dialog id="terms-dialog" class="action-dialog" aria-labelledby="terms-title"><div class="dialog-topline"><span class="mono" id="terms-loan-id"></span><button type="button" class="text-button" data-close-dialog="terms-dialog">Close</button></div><p class="eyebrow">Before you accept</p><h2 id="terms-title">Your Key Facts Statement.</h2><p class="dialog-description">Read the full statement, including fees, total cost and your cooling-off exit right.</p><div id="terms-details" class="terms-details"></div><div id="terms-document"></div><label class="terms-confirm"><input id="terms-confirm" type="checkbox">I have read the Key Facts Statement and accept these synthetic demo terms.</label><button id="terms-accept" class="button" disabled>Accept Key Facts Statement <span aria-hidden="true">→</span></button></dialog>
-  <input id="upload-input" type="file" accept=".csv,.json,.pdf,.png,.jpg,.jpeg,.docx,.xlsx" hidden>
-  <div id="toast" class="toast" role="status" hidden></div>
+<body class="landing-page">
+  <a class="skip-link" href="#landing-main">Skip to content</a>
+  <div class="landing-wash" aria-hidden="true"></div>
+  <header class="landing-nav">
+    <a class="wordmark" href="/" aria-label="Lendix home">Lendix<span class="wordmark-period">.</span></a>
+    <nav class="nav-switch" aria-label="Main navigation"><a href="/" aria-current="page">The perspective</a><a href="/office">Live office</a></nav>
+    <a class="button small ghost nav-enter" href="/app">Open workspace <span aria-hidden="true">↗</span></a>
+  </header>
+  <main id="landing-main" class="landing-main">
+    <div class="hero-copy">
+      <p class="hero-eyebrow"><span class="eyebrow-line" aria-hidden="true"></span>The lending operating system</p>
+      <h1>A clearer<br> way to lend.</h1>
+      <p class="hero-description">Every document connected.<br>Every decision considered.</p>
+      <div class="hero-actions"><a class="button hero-primary" href="/app">Enter workspace <span aria-hidden="true">↗</span></a><button id="process-replay" class="hero-secondary" type="button"><span class="play-mark" aria-hidden="true">▷</span> See it in motion</button></div>
+      <div class="hero-principle"><span class="principle-rule" aria-hidden="true"></span><p>Nine specialists. Written policy.<br><strong>Human judgment where it matters.</strong></p></div>
+    </div>
+    <section class="engine-stage" aria-label="A visual journey from lending evidence to a policy decision">
+      <canvas id="glass-engine" aria-hidden="true"></canvas>
+      <div class="engine-fallback" aria-hidden="true"><div></div><div></div><div></div></div>
+      <div class="orbital orbit-one" aria-hidden="true"></div><div class="orbital orbit-two" aria-hidden="true"></div>
+      <div class="source-document source-identity" aria-hidden="true"><span class="source-tab">Identity</span><div class="identity-layout"><span class="identity-portrait"></span><div class="source-lines"><i></i><i></i><i></i></div></div><span class="source-check">Identity verified <b>✓</b></span></div>
+      <div class="source-document source-statement" aria-hidden="true"><span class="source-tab">Bank statement</span><div class="statement-line"><i></i><span>₹65,000</span></div><div class="statement-line"><i></i><span>₹4,000</span></div><div class="source-chart"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
+      <div class="source-document source-policy" aria-hidden="true"><span class="source-tab">Credit policy</span><span class="policy-expression">Evidence in.<br>Clarity out.</span><div class="source-lines"><i></i><i></i></div></div>
+      <div class="dossier-shadow" aria-hidden="true"></div>
+      <article class="hero-dossier" aria-label="Illustrated application L-1043, Mira Desai, one lakh rupees">
+        <div class="dossier-top"><span class="mono">L-1043</span><span class="dossier-live"><i></i><span id="dossier-stage">Evidence connected</span></span></div>
+        <div class="dossier-person"><span class="dossier-avatar">MD</span><div><span class="dossier-name">Mira Desai</span><span class="dossier-type">Personal loan application</span></div><span class="dossier-arrow" aria-hidden="true">↗</span></div>
+        <div class="dossier-amount"><span class="currency">₹</span><span>1,00,000</span></div>
+        <div class="dossier-meta"><span>24 months</span><span class="meta-dot">·</span><span>Verified income</span></div>
+        <div class="dossier-divider"></div>
+        <div class="dossier-checks"><span><i class="check-symbol">✓</i> Identity matched</span><span><i class="check-symbol">✓</i> Income checked</span><span><i class="check-symbol">✓</i> Policy applied</span></div>
+        <div class="dossier-result"><span class="result-symbol" aria-hidden="true">✓</span><div><span class="result-title">Approved by policy</span><span class="result-caption">Every reason. On record.</span></div><span class="result-seal">v1</span></div>
+        <div class="dossier-bottom"><span>Underwriter</span><span>Written policy, applied consistently</span></div>
+      </article>
+      <div class="policy-notification" aria-hidden="true"><span class="notification-mark">✓</span><div><strong>The whole picture.</strong><span>One considered decision.</span></div></div>
+      <div class="scene-caption"><span class="scene-index" id="scene-index">01 / 03</span><span id="scene-caption">A complete picture begins with evidence.</span></div>
+    </section>
+  </main>
+  <footer class="landing-footer">
+    <a class="footer-note nonilion-room-link" href="https://www.nonilion.com/room/emp-3j51-ge67-xbc7" target="_blank" rel="noopener noreferrer">The office lives in Nonilion <span aria-hidden="true">↗</span></a>
+    <div class="chapter-control" role="group" aria-label="Animation chapters"><button type="button" data-chapter="0" aria-pressed="true"><span>01</span> Evidence</button><button type="button" data-chapter="1" aria-pressed="false"><span>02</span> Understanding</button><button type="button" data-chapter="2" aria-pressed="false"><span>03</span> Decision</button></div>
+    <button id="motion-toggle" class="motion-toggle" type="button" aria-pressed="false"><span aria-hidden="true" id="motion-symbol">Ⅱ</span><span id="motion-label">Pause motion</span></button>
+  </footer>
 </body>
 </html>
