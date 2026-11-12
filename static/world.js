@@ -485,7 +485,7 @@
     src = new EventSource("/api/events");
     src.onmessage = ev => { try { push(JSON.parse(ev.data)); } catch (_) { ticker("Office", "An update could not be read. The live record will reconnect."); } };
     src.onerror = () => { document.getElementById("office-connection").textContent = "Reconnecting"; };
-    src.onopen = () => { document.getElementById("office-connection").textContent = "Live events"; };
+    src.onopen = () => { document.getElementById("office-connection").textContent = "Live events"; refreshState(true).then(record => { document.getElementById("office-connection").textContent = record.nonilion_connected ? "Live events · Nonilion connected" : "Live events"; }); };
   }
   connectEvents();
   addEventListener("pagehide", () => src.close());
