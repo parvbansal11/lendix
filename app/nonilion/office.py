@@ -96,11 +96,9 @@ class OfficeBridge:
         for task in [*self.tasks, *self.gestures]:
             task.cancel()
         await asyncio.gather(*self.tasks, *self.gestures, return_exceptions=True)
+        # No leave_room: on a redeploy the new instance enters before this one stops, and the
+        # avatar belongs to the token, so leaving here would pull the new instance out too.
         for client in self.avatars.values():
-            try:
-                await client.call("leave_room")
-            except Exception:
-                pass
             await client.close()
 
     # Inbound: people talking to Front Desk.
@@ -119,7 +117,7 @@ class OfficeBridge:
                 raise
             except Exception as exc:
                 log.warning("nonilion listen failed: %s", type(exc).__name__ if not isinstance(exc, NonilionError) else exc)
-                if isinstance(exc, NonilionError) and "enter_room" in str(exc):
+                if isinstance(exc, NonilionError) and ("enter_room" in str(exc) or "avatar" in str(exc).lower()):
                     self.connected = False
                 await self.sleep(backoff)
                 backoff = min(backoff * 2, 60)
