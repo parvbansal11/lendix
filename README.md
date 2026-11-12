@@ -195,6 +195,7 @@ The official [`google-genai` SDK](https://ai.google.dev/gemini-api/docs/librarie
 | `NONILION_DEV_ALLOW_UNVERIFIED` | `0` |
 | `NONILION_PAIRING_CODE` | Leave unset until the documented integration is implemented |
 | `NONILION_BOT_TOKEN` | Leave unset (webhook route not used) |
+| `GEMINI_MODEL_FALLBACK` | Optional: a second model used when the first returns 429 or 503 (overloaded) |
 | `NONILION_MCP_TOKEN` | Front Desk's personal token from Mission Control → MCP |
 | `NONILION_RISK_HEAD` | Optional: the risk head's Nonilion name; defaults to the room owner |
 | `PORT` | Supplied by Render |

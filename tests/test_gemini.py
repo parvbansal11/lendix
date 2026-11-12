@@ -109,15 +109,15 @@ class ProviderFailure(Exception):
 
 @pytest.mark.parametrize("failure", [ProviderFailure(429), ProviderFailure(500), ProviderFailure(503), TimeoutError("private-provider-diagnostic"), ConnectionError("private-provider-diagnostic")])
 @pytest.mark.asyncio
-async def test_transient_failures_retry_three_attempts_with_backoff(transport, failure):
+async def test_transient_failures_retry_five_attempts_with_backoff(transport, failure):
     client, _, store, generate, sleep = transport
     generate.side_effect = failure
     with pytest.raises(ModelUnavailable, match="I'm having trouble reaching my model, retrying shortly") as error:
         await client.structured(AGENTS["Risk"], {})
     assert "private-provider-diagnostic" not in str(error.value)
-    assert generate.await_count == 3
-    assert [call.args[0] for call in sleep.await_args_list] == [1, 2]
-    assert quota_calls(store) == 3
+    assert generate.await_count == 5
+    assert [call.args[0] for call in sleep.await_args_list] == [1, 2, 4, 8]
+    assert quota_calls(store) == 5
 
 
 @pytest.mark.asyncio
@@ -256,3 +256,24 @@ async def test_sdk_timeouts_are_retried_as_transient(transport):
     output = await client.structured(AGENTS["Risk"], {"loan_id": "L-1043"})
     assert output.summary == "Recovered after a slow call."
     assert sleep.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_overloaded_model_switches_to_fallback(transport):
+    client, settings, _, generate, _ = transport
+    settings.model_fallback = "test-fallback"
+    ok = SimpleNamespace(parsed={"summary": "Answered by the fallback."}, text=None, function_calls=[])
+    generate.side_effect = [ProviderFailure(503), ok]
+    output = await client.structured(AGENTS["Risk"], {})
+    assert output.summary == "Answered by the fallback."
+    assert [call.kwargs["model"] for call in generate.await_args_list] == ["test-fast", "test-fallback"]
+
+
+@pytest.mark.asyncio
+async def test_no_fallback_for_non_overload_errors(transport):
+    client, settings, _, generate, _ = transport
+    settings.model_fallback = "test-fallback"
+    ok = SimpleNamespace(parsed={"summary": "Recovered."}, text=None, function_calls=[])
+    generate.side_effect = [ProviderFailure(500), ok]
+    await client.structured(AGENTS["Risk"], {})
+    assert [call.kwargs["model"] for call in generate.await_args_list] == ["test-fast", "test-fast"]

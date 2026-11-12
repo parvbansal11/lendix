@@ -29,7 +29,9 @@ class GeminiClient:
         return "<UNTRUSTED_DATA>\n" + encoded + "\n</UNTRUSTED_DATA>"
 
     async def request(self, **kwargs):
-        for attempt in range(3):
+        attempts = max(1, getattr(self.settings, "model_max_attempts", 5))
+        fallback = getattr(self.settings, "model_fallback", "")
+        for attempt in range(attempts):
             if not self.store.reserve_llm_call(self.settings.max_llm_calls_per_day):
                 raise ModelBudgetExceeded("The daily model-call limit has been reached. Existing documents and risk-head actions remain available; please retry after the daily reset.")
             try:
@@ -38,12 +40,18 @@ class GeminiClient:
                 code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
                 try:
                     transient = int(code) == 429 or 500 <= int(code) <= 599
+                    overloaded = int(code) in (429, 503)
                 except (TypeError, ValueError):
                     transient = isinstance(exc, (TimeoutError, ConnectionError)) or "timeout" in type(exc).__name__.lower()
+                    overloaded = False
                 # Class and status only: provider messages can echo request content.
                 log.warning("model call failed: %s status=%s attempt=%d transient=%s", type(exc).__name__, code, attempt + 1, transient)
-                if transient and attempt < 2:
-                    await self.sleep(2 ** attempt)
+                if transient and attempt < attempts - 1:
+                    # An overloaded model often stays busy for a while; a configured fallback takes over.
+                    if overloaded and fallback and kwargs.get("model") != fallback:
+                        log.warning("switching to the fallback model after status=%s", code)
+                        kwargs["model"] = fallback
+                    await self.sleep(min(2 ** attempt, 8))
                     continue
                 # Provider exception strings can contain sensitive request details.
                 raise ModelUnavailable("I'm having trouble reaching my model, retrying shortly. Please send the request again.") from None

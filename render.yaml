@@ -44,6 +44,8 @@ services:
         sync: false
       - key: NONILION_BOT_TOKEN
         sync: false
+      - key: GEMINI_MODEL_FALLBACK
+        sync: false
       - key: NONILION_MCP_TOKEN
         sync: false
       - key: NONILION_RISK_HEAD
