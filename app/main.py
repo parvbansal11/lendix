@@ -17,6 +17,8 @@ from .config import DEMO_USERS, ROOT, Settings
 from .gemini import GeminiClient
 from .model import ModelUnavailable
 from .nonilion.adapter import LocalAdapter, NonilionAdapter, verify_nonilion_request
+from .nonilion.mcp import NonilionMCP
+from .nonilion.office import OfficeBridge
 from .orchestrator import Orchestrator
 from .policy import load_policy
 from .store import Store, utcnow
@@ -29,7 +31,7 @@ class ChatRequest(BaseModel):
     conversation_id: str = Field(default="office", min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_-]+$")
 
 
-def create_app(settings=None, model=None):
+def create_app(settings=None, model=None, office_client=None):
     settings = settings or Settings()
     tasks = set()
 
@@ -61,7 +63,19 @@ def create_app(settings=None, model=None):
                     store.emit("error", "Collections", "A scheduled reminder needs operator attention; it remains queued.")
 
         clock_task = asyncio.create_task(reminders())
+        app.state.office = None
+        if settings.nonilion_mcp_token:
+            async def run_in_office(text, role, conversation):
+                submit(lambda: local.on_message({"message": text, "role": role, "conversation_id": conversation}),
+                       conversation, "nonilion message")
+            app.state.office = OfficeBridge(
+                store, settings, run_in_office, token=settings.nonilion_mcp_token,
+                agent_tokens=settings.nonilion_agent_tokens, room=settings.nonilion_room,
+                risk_head=settings.nonilion_risk_head, client_factory=office_client or NonilionMCP)
+            await app.state.office.start()
         yield
+        if app.state.office:
+            await app.state.office.stop()
         clock_task.cancel()
         for task in list(tasks):
             task.cancel()
@@ -151,14 +165,17 @@ def create_app(settings=None, model=None):
 
     @app.get("/healthz")
     async def health():
-        return {"status": "ok", "data": "synthetic", "nonilion": "not_connected"}
+        office = getattr(app.state, "office", None)
+        status = "connected" if office and office.connected else "connecting" if office else "not_connected"
+        return {"status": "ok", "data": "synthetic", "nonilion": status}
 
     @app.get("/api/state")
     async def state():
         documents = [{k: v for k, v in item.items() if k not in {"path", "token"}}
                      for item in app.state.store.all("file") if datetime.fromisoformat(item["expires_at"]) > utcnow()]
         return {"loans": app.state.store.all("loan"), "documents": documents, "users": DEMO_USERS,
-                "demo_role_switching": True, "nonilion_connected": False}
+                "demo_role_switching": True,
+                "nonilion_connected": bool(getattr(app.state, "office", None) and app.state.office.connected)}
 
     @app.post("/api/chat", status_code=202)
     async def chat(payload: ChatRequest, request: Request):

@@ -80,9 +80,16 @@ Every artifact carries a loan ID, date, recorded document ID and **SPECIMEN · S
 
 The working `LocalAdapter` displays chat, files, charts, risk-team FYIs, risk-head mentions and office-action events in the console. SSE shows handoffs, tools and statuses. Background batches acknowledge immediately, post progress and return reusable exports.
 
-The intended integration uses **Connect a bot**. [`NonilionAdapter`](app/nonilion/adapter.py) explicitly raises `NotImplementedError("fill from the Nonilion Bot API guide")`. The guide must provide webhook payloads and verification, reply/file/mention/office-action endpoints and pairing. Actual office movement, knowledge search and presence remain pending.
+Lendix joins a Nonilion room through **Nonilion's MCP server** (`https://www.nonilion.com/mcp`), using a personal token from Mission Control → MCP. [`app/nonilion/office.py`](app/nonilion/office.py) runs inside the service when `NONILION_MCP_TOKEN` is set:
 
-`POST /nonilion/webhook` rejects unverified requests by default. `NONILION_DEV_ALLOW_UNVERIFIED=1` permits a local acknowledgment test: HTTP 200 is immediate, while background work reports the unimplemented adapter. This is not a live connection. Pairing and a reply inside Nonilion are still required for judging.
+- **Front Desk is an avatar in the room.** It calls `listen` in a loop. A message such as `Review L-1043` runs the same pipeline as the console. The room owner speaks as the risk head; a prefix such as `borrower:` or `ops:` picks another demo role.
+- **The office log is mirrored into the room.** The working agent's step appears as an avatar status, decisions are said out loud, replies come back in the agent chat, and issued PDFs are posted to room chat (this needs an HTTPS `PUBLIC_BASE_URL`).
+- **Escalations walk to the risk head.** Reporter walks up to the risk head (`NONILION_RISK_HEAD`, default the room owner) and sends a direct message with the case.
+- **One avatar per token.** Front Desk's token is required. Optional `NONILION_TOKEN_<AGENT>` tokens (for example `NONILION_TOKEN_REPORTER`) give that agent its own avatar; other agents show through Front Desk's status line.
+
+Office gestures are best effort: a failed Nonilion call is logged by tool name only and never blocks a loan decision. Tokens are never logged. `/healthz` reports `nonilion: connected` once the avatars are in the room.
+
+The older webhook route (`POST /nonilion/webhook`) stays disabled: it rejects unverified requests, and `NonilionAdapter` remains a placeholder.
 
 ## Safety and compliance
 
@@ -187,7 +194,9 @@ The official [`google-genai` SDK](https://ai.google.dev/gemini-api/docs/librarie
 | `DEMO_SKIP_COOLING_OFF` | `1` for the synthetic presentation, otherwise `0` |
 | `NONILION_DEV_ALLOW_UNVERIFIED` | `0` |
 | `NONILION_PAIRING_CODE` | Leave unset until the documented integration is implemented |
-| `NONILION_BOT_TOKEN` | Leave unset until the documented integration is implemented |
+| `NONILION_BOT_TOKEN` | Leave unset (webhook route not used) |
+| `NONILION_MCP_TOKEN` | Front Desk's personal token from Mission Control → MCP |
+| `NONILION_RISK_HEAD` | Optional: the risk head's Nonilion name; defaults to the room owner |
 | `PORT` | Supplied by Render |
 
 Use one process with SQLite. Jobs interrupted by restart are marked for retry; completed transactions and policy audits remain recorded.

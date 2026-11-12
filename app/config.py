@@ -30,6 +30,14 @@ class Settings:
     nonilion_allow_unverified: bool = field(default_factory=lambda: os.getenv("NONILION_DEV_ALLOW_UNVERIFIED", "0") == "1")
     pairing_code: str = field(default_factory=lambda: os.getenv("NONILION_PAIRING_CODE", ""), repr=False)
     bot_token: str = field(default_factory=lambda: os.getenv("NONILION_BOT_TOKEN", ""), repr=False)
+    # Nonilion MCP personal tokens (Mission Control -> MCP). Front Desk's token switches the office on.
+    nonilion_mcp_token: str = field(default_factory=lambda: os.getenv("NONILION_MCP_TOKEN", "").strip(), repr=False)
+    nonilion_room: str = field(default_factory=lambda: os.getenv("NONILION_ROOM", "").strip())
+    nonilion_risk_head: str = field(default_factory=lambda: os.getenv("NONILION_RISK_HEAD", "").strip())
+    nonilion_agent_tokens: dict = field(repr=False, default_factory=lambda: {
+        agent: os.getenv(f"NONILION_TOKEN_{agent.upper().replace(' ', '_')}", "").strip()
+        for agent in ("Intake", "Risk", "Credit", "Underwriter", "Compliance", "Disbursement", "Collections", "Reporter")
+        if os.getenv(f"NONILION_TOKEN_{agent.upper().replace(' ', '_')}", "").strip()})
 
     def validate(self):
         if not self.gemini_api_key:
