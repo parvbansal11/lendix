@@ -62,8 +62,8 @@ class Store:
                 session.delete(record)
                 session.commit()
 
-    def seed(self, source):
-        if self.all("loan"):
+    def seed(self, source, force=False):
+        if self.all("loan") and not force:
             return
         content = json.loads(Path(source).read_text())
         rows = content if isinstance(content, list) else content["applicants"] if "applicants" in content else content["loans"]

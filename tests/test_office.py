@@ -217,3 +217,53 @@ def test_handoff_walks_the_file_to_the_next_desk(settings):
     assert ("say_out_loud", {"text": "L-1045 for you, Credit."}) in risk
     assert risk[-1] == ("walk_to", {"x": DESKS["Risk"][0], "y": DESKS["Risk"][1]})
     assert ("emote", {"emote": "nod", "seconds": 2}) in [(n, a) for t, n, a in calls if t == "nmcp_credit"]
+
+
+def test_failed_chat_reply_is_posted_in_room_chat(settings):
+    fake = FakeNonilion([{"type": "message", "from": "riskhead", "text": "Review L-1043"}])
+
+    def factory(token):
+        client = fake.factory(token)
+        original = client.call
+
+        async def call(name, args=None):
+            if name == "reply":
+                outer_calls = fake.calls
+                outer_calls.append((token, name, args or {}))
+                raise NonilionError("reply: no open conversation")
+            return await original(name, args)
+        client.call = call
+        return client
+
+    app = create_app(settings, FakeClient(), office_client=factory)
+    with TestClient(app):
+        assert wait_for(lambda: any(n == "post_room_chat" and a.get("mention") == ["@riskhead"]
+                                    for _, n, a in fake.calls), 20)
+
+
+def test_risk_head_can_reset_the_demo(tmp_path):
+    from app.config import ROOT
+    from app.nonilion.adapter import LocalAdapter
+    from app.orchestrator import Orchestrator
+    from app.store import Store
+    settings = Settings(gemini_api_key="k", model_fast="f", model_deep="d", db_path=str(tmp_path / "o.db"),
+                        output_dir=str(tmp_path / "out"), demo_skip_cooling=True, nonilion_mcp_token="")
+    store = Store(settings.db_path)
+    store.seed(ROOT / "data/seed.json")
+    adapter = LocalAdapter(store)
+    office = Orchestrator(store, settings, FakeClient(), adapter)
+    adapter.orchestrator = office
+
+    async def run():
+        await office.run("Review L-1043", "ops")
+        assert store.get("loan", "L-1043")["status"] == "approved"
+        await office.run("reset demo", "ops")
+        assert store.get("loan", "L-1043")["status"] == "approved"
+        await office.run("reset demo", "risk_head")
+        assert store.get("loan", "L-1043").get("status", "new") == "new"
+
+    asyncio.run(run())
+    replies = [e["text"] for e in store.all_events() if e["kind"] == "reply"]
+    assert any("Only the risk head can reset the demo" in r for r in replies)
+    assert any(r.startswith("Demo reset:") for r in replies)
+    assert any(e["kind"] == "decision" for e in store.all_events())  # the audit log survives the reset

@@ -328,7 +328,12 @@
       if (context) { const previous = work.get(context); if (previous) previous.active = false; const last = [...jobs.values()].find((job) => job.loanId === context); const error = event.kind === "error" || /trouble reaching|please retry|retry the|model returned|daily model-call limit|could not (?:finish|complete)/i.test(event.text || ""); notes.set(context, { text: String(event.text || ""), error, retry: last?.retry || `review ${context}`, role: last?.role || role }); }
       else if (event.kind === "error") notice(event.text);
     }
-    if (event.data?.job_id && ["completed", "failed", "interrupted"].includes(event.data.status)) finishJob(event.data.job_id, event.data.status);
+    if (event.data?.job_id && ["completed", "failed", "interrupted"].includes(event.data.status)) {
+      // The office runs one job at a time, so a finished job means nothing is still working,
+      // including steps replayed from earlier sessions when the page loads.
+      work.forEach((entry) => { entry.active = false; });
+      finishJob(event.data.job_id, event.data.status);
+    }
     renderSoon(); scheduleRefresh();
   }
   function connectEvents() { source = new EventSource("/api/events?conversation_id=office"); source.onopen = () => { $("connection-label").textContent = "Office connected"; $("activity-connection").textContent = "Live record"; scheduleRefresh(); }; source.onerror = () => { $("connection-label").textContent = "Reconnecting to the office"; $("activity-connection").textContent = "Reconnecting"; }; source.onmessage = (message) => { try { handleEvent(JSON.parse(message.data)); } catch (_) { notice("An office update could not be read. The loan record will refresh automatically."); scheduleRefresh(); } }; }

@@ -262,7 +262,8 @@ def create_app(settings=None, model=None, office_client=None):
                 rows = app.state.store.events(cursor, limit=250)
                 for item in rows:
                     cursor = item["id"]
-                    if item["conversation_id"] in {conversation_id, "office"}:
+                    # Requests made inside Nonilion run the same office, so the console shows them too.
+                    if item["conversation_id"] in {conversation_id, "office", "nonilion"}:
                         yield f"id: {cursor}\ndata: {json.dumps(item, ensure_ascii=False)}\n\n"
                 heartbeat += 1
                 if heartbeat % 20 == 0:

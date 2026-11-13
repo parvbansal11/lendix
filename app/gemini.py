@@ -2,6 +2,7 @@
 import asyncio
 import json
 import logging
+import time
 from google import genai
 from google.genai import types
 
@@ -34,22 +35,32 @@ class GeminiClient:
         for attempt in range(attempts):
             if not self.store.reserve_llm_call(self.settings.max_llm_calls_per_day):
                 raise ModelBudgetExceeded("The daily model-call limit has been reached. Existing documents and risk-head actions remain available; please retry after the daily reset.")
+            started = time.monotonic()
+            limit = getattr(self.settings, "model_attempt_timeout_s", 40)
             try:
-                return await self.sdk.aio.models.generate_content(**kwargs)
+                # A hung call is cut off and retried rather than holding the whole office for minutes.
+                response = await asyncio.wait_for(self.sdk.aio.models.generate_content(**kwargs), timeout=limit)
+                took = time.monotonic() - started
+                if took > 20:
+                    log.warning("slow model call: %.1fs model=%s attempt=%d", took, kwargs.get("model"), attempt + 1)
+                return response
             except Exception as exc:
                 code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
+                timed_out = isinstance(exc, (asyncio.TimeoutError, TimeoutError)) or "timeout" in type(exc).__name__.lower()
                 try:
                     transient = int(code) == 429 or 500 <= int(code) <= 599
                     overloaded = int(code) in (429, 503)
                 except (TypeError, ValueError):
-                    transient = isinstance(exc, (TimeoutError, ConnectionError)) or "timeout" in type(exc).__name__.lower()
-                    overloaded = False
+                    transient = timed_out or isinstance(exc, ConnectionError)
+                    # A model that does not answer in time is treated like an overloaded one.
+                    overloaded = timed_out
                 # Class and status only: provider messages can echo request content.
-                log.warning("model call failed: %s status=%s attempt=%d transient=%s", type(exc).__name__, code, attempt + 1, transient)
+                log.warning("model call failed: %s status=%s attempt=%d transient=%s after %.1fs model=%s",
+                            type(exc).__name__, code, attempt + 1, transient, time.monotonic() - started, kwargs.get("model"))
                 if transient and attempt < attempts - 1:
                     # An overloaded model often stays busy for a while; a configured fallback takes over.
                     if overloaded and fallback and kwargs.get("model") != fallback:
-                        log.warning("switching to the fallback model after status=%s", code)
+                        log.warning("switching to the fallback model after status=%s", code or "timeout")
                         kwargs["model"] = fallback
                     await self.sleep(min(2 ** attempt, 8))
                     continue

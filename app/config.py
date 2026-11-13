@@ -27,6 +27,7 @@ class Settings:
     model_timeout_ms: int = field(default_factory=lambda: int(os.getenv("GEMINI_TIMEOUT_MS", "90000")))
     # Gemini can return 503 when a model is overloaded: retry with backoff, then try the fallback model.
     model_max_attempts: int = field(default_factory=lambda: int(os.getenv("GEMINI_MAX_ATTEMPTS", "5")))
+    model_attempt_timeout_s: float = field(default_factory=lambda: float(os.getenv("GEMINI_ATTEMPT_TIMEOUT_S", "40")))
     model_fallback: str = field(default_factory=lambda: os.getenv("GEMINI_MODEL_FALLBACK", "").strip())
     cooling_off_days: int = field(default_factory=lambda: int(os.getenv("COOLING_OFF_DAYS", "1")))
     demo_skip_cooling: bool = field(default_factory=lambda: os.getenv("DEMO_SKIP_COOLING_OFF", "0") == "1")
@@ -51,6 +52,8 @@ class Settings:
             raise RuntimeError("MAX_LLM_CALLS_PER_DAY and COOLING_OFF_DAYS must be positive.")
         if self.thinking_level not in {"", "off", "minimal", "low", "medium", "high"}:
             raise RuntimeError("GEMINI_THINKING_LEVEL must be one of minimal, low, medium, high, or off.")
+        if not 5 <= self.model_attempt_timeout_s <= 300:
+            raise RuntimeError("GEMINI_ATTEMPT_TIMEOUT_S must be between 5 and 300 seconds.")
         if not 1 <= self.model_max_attempts <= 8:
             raise RuntimeError("GEMINI_MAX_ATTEMPTS must be between 1 and 8.")
         if self.model_timeout_ms < 5000:

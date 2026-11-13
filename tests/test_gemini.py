@@ -277,3 +277,22 @@ async def test_no_fallback_for_non_overload_errors(transport):
     generate.side_effect = [ProviderFailure(500), ok]
     await client.structured(AGENTS["Risk"], {})
     assert [call.kwargs["model"] for call in generate.await_args_list] == ["test-fast", "test-fast"]
+
+
+@pytest.mark.asyncio
+async def test_hung_call_is_cut_off_and_retried_on_the_fallback(transport):
+    import asyncio as aio
+    client, settings, _, generate, _ = transport
+    settings.model_fallback = "test-fallback"
+    settings.model_attempt_timeout_s = 0.05
+    ok = SimpleNamespace(parsed={"summary": "Fallback answered."}, text=None, function_calls=[])
+
+    async def slow_then_fast(**kwargs):
+        if kwargs["model"] == "test-fast":
+            await aio.sleep(5)
+        return ok
+
+    generate.side_effect = slow_then_fast
+    output = await client.structured(AGENTS["Risk"], {})
+    assert output.summary == "Fallback answered."
+    assert [call.kwargs["model"] for call in generate.await_args_list] == ["test-fast", "test-fallback"]

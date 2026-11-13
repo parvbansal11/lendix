@@ -70,6 +70,7 @@ class OfficeBridge:
         self.status_workers = {}
         self.gesture_slots = asyncio.Semaphore(4)
         self.queues = {}
+        self.last_sender = None
         self.last_activity = 0.0
 
     async def say(self, agent, tool, args):
@@ -215,6 +216,7 @@ class OfficeBridge:
                 backoff = min(backoff * 2, 60)
 
     async def handle(self, event):
+        self.last_sender = event.get("from") or self.last_sender
         role, text = parse_role(event["text"], event.get("from"), self.owner)
         if not text:
             return
@@ -313,6 +315,15 @@ class OfficeBridge:
 
     async def find_risk_head(self, agent):
         """The risk head's name as the room shows it now (display names change; handles don't resolve)."""
+        name = await self.spot_risk_head(agent)
+        if name is None:
+            # Out of sight: walk to the middle of the office and look again.
+            _, walked = await self.say(agent, "walk_to", self.desk("Front Desk"))
+            await self.sleep(min(float((walked or {}).get("seconds") or 1), 12) + 0.5)
+            name = await self.spot_risk_head(agent)
+        return name
+
+    async def spot_risk_head(self, agent):
         _, seen = await self.say(agent, "look_around", {})
         people = [p.get("name") for p in (seen or {}).get("people", []) if p.get("name")]
         wanted = (self.risk_head or "").casefold()
@@ -350,4 +361,10 @@ class OfficeBridge:
             if url.startswith("https://"):
                 await self.say("Reporter", "post_room_chat", {"text": f"{event['text']} ({event.get('loan_id') or 'Lendix'})", "media_urls": [url]})
             return
-        await self.say("Front Desk", "reply", {"text": short(event["text"], 3500), "speak": False})
+        text = short(event["text"], 3500)
+        sent, _ = await self.say("Front Desk", "reply", {"text": text, "speak": False})
+        if sent is None:
+            # The chat reply can be rejected (for example once that conversation has moved on);
+            # the answer still reaches the person in room chat.
+            tag = [f"@{self.last_sender}"] if self.last_sender else []
+            await self.say("Front Desk", "post_room_chat", {"text": text, "mention": tag})

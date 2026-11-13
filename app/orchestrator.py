@@ -16,6 +16,8 @@ from .risk_rules import run_risk_checks
 from .store import utcnow
 from .tools import bureau_lookup, compute_affordability, emi_schedule, validate_application
 
+SEED_PATH = ROOT / "data/seed.json"
+
 IST = ZoneInfo("Asia/Kolkata")
 WATERMARK = "SPECIMEN · SYNTHETIC DEMO DATA · NOT A LEGAL DOCUMENT"
 HELP = "Lendix handles loan applications, document checks, policy decisions, risk-head escalations, repayments and complaints. Try ‘review L-1042’, ‘list loans’, or tell me which lending task you need."
@@ -141,6 +143,8 @@ class Orchestrator:
         if match and not loan:
             return await self.reply("I cannot find that loan. Use ‘list loans’ to see the synthetic applications.")
         # Safety gates execute before model routing and cannot be bypassed by instructions in chat.
+        if text.strip(" .!") in {"reset demo", "reset the demo"}:
+            return await self.reset_demo(role)
         if any(word in text for word in ("social media", "social profile", "social network")):
             return await self.reply("I only use consented application data. I cannot look up someone’s social media.", loan)
         if any(word in text for word in ("employer", "family", "friends", "third party", "third-party")) and any(word in text for word in ("contact", "message", "call", "tell", "send")):
@@ -257,6 +261,20 @@ class Orchestrator:
         if route.intent == "review" and loan:
             return await self.review(loan)
         return await self.reply(HELP + "\nWhich loan or task should we work on?")
+
+    async def reset_demo(self, role):
+        """Put the synthetic applications back to their starting state; the audit log is kept."""
+        if role != "risk_head":
+            return await self.reply("Only the risk head can reset the demo.")
+        self.store.seed(SEED_PATH, force=True)
+        for item in self.store.all("conversation"):
+            if item.get("id"):
+                self.store.delete("conversation", item["id"])
+        self.store.delete("conversation", self.conversation)
+        count = len(self.store.all("loan"))
+        self.event("status", "Front Desk", f"Demo reset by the risk head: {count} synthetic applications restored.")
+        return await self.reply(f"Demo reset: {count} synthetic applications are back to their starting state. "
+                                "Earlier decisions stay in the audit log.")
 
     async def review(self, loan):
         if loan.get("status") in {"approved", "declined", "escalated"} and loan.get("decision_operation_id"):
