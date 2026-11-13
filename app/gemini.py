@@ -59,9 +59,12 @@ class GeminiClient:
                             type(exc).__name__, code, attempt + 1, transient, time.monotonic() - started, kwargs.get("model"))
                 if transient and attempt < attempts - 1:
                     # An overloaded model often stays busy for a while; a configured fallback takes over.
-                    if overloaded and fallback and kwargs.get("model") != fallback:
-                        log.warning("switching to the fallback model after status=%s", code or "timeout")
-                        kwargs["model"] = fallback
+                    if overloaded:
+                        # Try the configured fallback first, then the fast model, skipping the one that failed.
+                        backup = next((m for m in (fallback, self.settings.model_fast) if m and m != kwargs.get("model")), None)
+                        if backup:
+                            log.warning("switching to %s after status=%s", backup, code or "timeout")
+                            kwargs["model"] = backup
                     await self.sleep(min(2 ** attempt, 8))
                     continue
                 # Provider exception strings can contain sensitive request details.

@@ -296,3 +296,14 @@ async def test_hung_call_is_cut_off_and_retried_on_the_fallback(transport):
     output = await client.structured(AGENTS["Risk"], {})
     assert output.summary == "Fallback answered."
     assert [call.kwargs["model"] for call in generate.await_args_list] == ["test-fast", "test-fallback"]
+
+
+@pytest.mark.asyncio
+async def test_deep_model_falls_back_to_fast_when_fallback_is_the_same_model(transport):
+    client, settings, _, generate, _ = transport
+    settings.model_deep = "test-deep"
+    settings.model_fallback = "test-deep"
+    ok = SimpleNamespace(parsed={"decision_note": "x"}, text=None, function_calls=[])
+    generate.side_effect = [ProviderFailure(503), ok]
+    await client.request(model="test-deep", contents="{}")
+    assert [call.kwargs["model"] for call in generate.await_args_list] == ["test-deep", "test-fast"]
